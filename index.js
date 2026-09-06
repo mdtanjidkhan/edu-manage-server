@@ -33,16 +33,17 @@ async function run() {
     const feesCollection = db.collection("fees");
     const settingsCollection = db.collection("settings");
     const noticeCollection = db.collection("notices");
+    const routineCollection = db.collection("routine");
+    const marksCollection = db.collection("marks");
     // ==========================================
     // 🚀 TASK 1.1: ADMIN STATS API
     // ==========================================
     app.get('/api/admin/stats', async (req, res) => {
       try {
-        // ডাটাবেজ থেকে রিয়েল কাউন্ট
+       
         const totalStudents = await usersCollection.countDocuments({ role: "student" });
         const totalTeachers = await usersCollection.countDocuments({ role: "teacher" });
         
-        // ডামি ডাটা (পরবর্তীতে রিয়েল টেবিল থেকে ক্যালকুলেট হবে)
         const totalFees = 45000; 
         const attendancePercentage = "92%";
 
@@ -61,17 +62,26 @@ async function run() {
       }
     });
 
-    // 🚀 TASK 1.2: GET ALL STUDENTS
+
  // ==========================================
 // 🚀 TASK 1.2: GET ALL STUDENTS
-// ==========================================
+
 app.get('/api/admin/students', async (req, res) => {
   try {
-    // শুধুমাত্র role: "student" ফিল্টার করে ডাটা নেওয়া
+    const { classId } = req.query; 
+    const query = { role: "student" };
+
+    if (classId) {
+      query.$or = [
+        { classId: classId },
+        { class: classId }
+      ];
+    }
+
     const students = await usersCollection
-      .find({ role: "student" })
-      .project({ password: 0 }) // সিকিউরিটির জন্য পাসওয়ার্ড বাদ দেওয়া হয়েছে
-      .sort({ createdAt: -1 })
+      .find(query)
+      .project({ password: 0 }) 
+      .sort({ roll: 1, createdAt: -1 }) 
       .toArray();
 
     res.status(200).json({
@@ -84,23 +94,19 @@ app.get('/api/admin/students', async (req, res) => {
   }
 });
 
-// ==========================================
+
 // 🚀 TASK 1.2: ADD NEW STUDENT (POST)
-// ==========================================
+
 app.post('/api/admin/students', async (req, res) => {
   try {
-    // department এর জায়গায় class এবং group রিসিভ করা হচ্ছে
     const { name, email, password, studentId, class: className, group } = req.body;
 
-    // ১. ফিল্ড ভ্যালিডেশন
     if (!name || !email || !password || !studentId || !className) {
       return res.status(400).json({ 
         success: false, 
         message: "All required fields (name, email, password, studentId, class) must be provided." 
       });
     }
-
-    // ২. ইমেইল বা স্টুডেন্ট আইডি আগে থেকেই আছে কি না তা চেক করা
     const existingUser = await usersCollection.findOne({
       $or: [{ email }, { studentId }]
     });
@@ -112,10 +118,8 @@ app.post('/api/admin/students', async (req, res) => {
       });
     }
 
-    // ৩. পাসওয়ার্ড হ্যাশ করা
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // ৪. নতুন স্টুডেন্ট অবজেক্ট তৈরি
     const newStudent = {
       name,
       email,
@@ -123,13 +127,12 @@ app.post('/api/admin/students', async (req, res) => {
       role: "student",
       studentId,
       class: className,
-      group: group || "General", // Class 6-8 এর জন্য ডিফল্ট General
+      group: group || "General", // Class 6-8 
       emailVerified: false,
       createdAt: new Date(),
       updatedAt: new Date()
     };
 
-    // ৫. ডাটাবেজে ইনসার্ট
     const result = await usersCollection.insertOne(newStudent);
 
     res.status(201).json({
@@ -211,9 +214,7 @@ app.delete('/api/admin/students/:id', async (req, res) => {
   }
 });
 
-
-// ==========================================
-// 🚀 TASK 1.3: GET ALL TEACHERS
+//  TASK 1.3: GET ALL TEACHERS
 
 app.get('/api/admin/teachers', async (req, res) => {
   try {
@@ -230,89 +231,74 @@ app.get('/api/admin/teachers', async (req, res) => {
   }
 });
 
-// ==========================================
+
 //  TASK 1.3: ADD NEW TEACHER (POST)
-// ==========================================
+// 1. POST: Create New Teacher
+
 app.post('/api/admin/teachers', async (req, res) => {
   try {
-    
     const { name, email, password, designation, subject } = req.body;
-    if (!name || !email || !password || !designation || !subject) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "All fields (name, email, password, designation, subject) are required." 
-      });
-    }
-    const existingUser = await usersCollection.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: "User with this email already exists."
-      });
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: "Name, email, and password are required" });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const existingUser = await usersCollection.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: "Email already registered" });
+    }
 
     const newTeacher = {
       name,
       email,
-      password: hashedPassword,
+      password, // Note: Hash with bcrypt in production
       role: "teacher",
-      designation,
-      subject,
+      designation: designation || "Assistant Teacher",
+      subject: subject || "Mathematics",
+      emailVerified: false,
       createdAt: new Date(),
       updatedAt: new Date()
     };
 
     const result = await usersCollection.insertOne(newTeacher);
-
-    res.status(201).json({
-      success: true,
-      message: "Teacher added successfully!",
-      teacherId: result.insertedId
-    });
+    res.status(201).json({ success: true, message: "Teacher created successfully", insertedId: result.insertedId });
   } catch (error) {
-    console.error("Add Teacher Error:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    console.error("Error creating teacher:", error);
+    res.status(500).json({ success: false, message: "Failed to create teacher" });
   }
 });
 
 // ==========================================
-// 🚀 TASK 1.3: UPDATE TEACHER (PUT)
+// 2. PUT: Update Teacher Details
 // ==========================================
 app.put('/api/admin/teachers/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, designation, subject } = req.body;
 
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Teacher ID" });
-    }
-
-    const updatedData = {
-      name,
-      email,
-      designation,
-      subject,
-      updatedAt: new Date()
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: {
+        name,
+        email,
+        designation: designation || "Assistant Teacher",
+        subject: subject || "Mathematics",
+        updatedAt: new Date()
+      }
     };
 
-    const result = await usersCollection.updateOne(
-      { _id: new ObjectId(id), role: "teacher" },
-      { $set: updatedData }
-    );
+    const result = await usersCollection.updateOne(filter, updateDoc);
 
     if (result.matchedCount === 0) {
       return res.status(404).json({ success: false, message: "Teacher not found" });
     }
 
-    res.status(200).json({ success: true, message: "Teacher details updated!" });
+    res.status(200).json({ success: true, message: "Teacher updated successfully" });
   } catch (error) {
-    console.error("Update Teacher Error:", error);
+    console.error("Error updating teacher:", error);
     res.status(500).json({ success: false, message: "Failed to update teacher" });
   }
 });
-
 // ==========================================
 // 🚀 TASK 1.3: DELETE TEACHER (DELETE)
 // ==========================================
@@ -418,6 +404,9 @@ app.get('/api/admin/attendance/students', async (req, res) => {
   }
 });
 
+
+
+
 // ==========================================
 // 2. TEACHER ATTENDANCE REPORT API (GET)
 // ==========================================
@@ -429,7 +418,6 @@ app.get('/api/admin/attendance/teachers', async (req, res) => {
     if (date) {
       query.date = date; // Format: YYYY-MM-DD
     }
-    // department এর পরিবর্তে subject দিয়ে ফিল্টার
     if (subject && subject !== "All") {
       query.subject = subject;
     }
@@ -446,6 +434,150 @@ app.get('/api/admin/attendance/teachers', async (req, res) => {
   }
 });
 
+
+// 1. POST: Create New Routine Entry
+
+// POST: Create Routine with Overlap Check (Task 2.4)
+
+app.post('/api/admin/routine', async (req, res) => {
+  try {
+    const { teacherId, teacherName, day, subjectName, classId, group, startTime, endTime, roomNo } = req.body;
+
+    if (!day || !subjectName || !classId || !startTime || !endTime) {
+      return res.status(400).json({ success: false, message: "Required routine fields missing" });
+    }
+
+    if (roomNo && roomNo !== "N/A") {
+      const roomConflict = await routineCollection.findOne({
+        day: day,
+        roomNo: roomNo,
+        $or: [
+          { startTime: { $lt: endTime }, endTime: { $gt: startTime } }
+        ]
+      });
+
+      if (roomConflict) {
+        return res.status(400).json({
+          success: false,
+          message: `Room ${roomNo} is already booked for ${roomConflict.subjectName} on ${day} (${roomConflict.startTime} - ${roomConflict.endTime})`
+        });
+      }
+    }
+    if (teacherId) {
+      const teacherConflict = await routineCollection.findOne({
+        day: day,
+        teacherId: teacherId,
+        $or: [
+          { startTime: { $lt: endTime }, endTime: { $gt: startTime } }
+        ]
+      });
+
+      if (teacherConflict) {
+        return res.status(400).json({
+          success: false,
+          message: `Teacher (${teacherName || teacherId}) already has a class in Room ${teacherConflict.roomNo} at this time (${teacherConflict.startTime} - ${teacherConflict.endTime})!`
+        });
+      }
+    }
+    const newRoutine = {
+      teacherId: teacherId || "",
+      teacherName: teacherName || "Unassigned",
+      day,
+      subjectName,
+      classId,
+      group: group || "General",
+      startTime,
+      endTime,
+      roomNo: roomNo || "N/A",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await routineCollection.insertOne(newRoutine);
+    res.status(201).json({ success: true, message: "Routine created successfully", insertedId: result.insertedId });
+
+  } catch (error) {
+    console.error("Error creating routine:", error);
+    res.status(500).json({ success: false, message: "Failed to create routine" });
+  }
+});
+
+
+// 2. GET: Get All Routines (Admin View)
+
+app.get('/api/admin/routine', async (req, res) => {
+  try {
+    const { classId, day } = req.query;
+    let query = {};
+
+    if (classId && classId !== "All") query.classId = classId;
+    if (day && day !== "All") query.day = day;
+
+    const routines = await routineCollection
+      .find(query)
+      .sort({ day: 1, startTime: 1 })
+      .toArray();
+
+    res.status(200).json({ success: true, routines });
+  } catch (error) {
+    console.error("Error fetching routines:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch routines" });
+  }
+});
+
+
+// 3. PUT: Update Routine Entry
+app.put('/api/admin/routine/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { teacherId, teacherName, day, subjectName, classId, group, startTime, endTime, roomNo } = req.body;
+
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: {
+        teacherId,
+        teacherName,
+        day,
+        subjectName,
+        classId,
+        group: group || "General",
+        startTime,
+        endTime,
+        roomNo,
+        updatedAt: new Date()
+      }
+    };
+
+    const result = await routineCollection.updateOne(filter, updateDoc);
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "Routine entry not found" });
+    }
+
+    res.status(200).json({ success: true, message: "Routine updated successfully" });
+  } catch (error) {
+    console.error("Error updating routine:", error);
+    res.status(500).json({ success: false, message: "Failed to update routine" });
+  }
+});
+
+
+// 4. DELETE: Remove Routine Entry
+app.delete('/api/admin/routine/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await routineCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "Routine entry not found" });
+    }
+
+    res.status(200).json({ success: true, message: "Routine deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting routine:", error);
+    res.status(500).json({ success: false, message: "Failed to delete routine" });
+  }
+});
 
 
 // ==========================================
@@ -480,9 +612,8 @@ app.get('/api/admin/fees', async (req, res) => {
   }
 });
 
-// ==========================================
+
 // 2. UPDATE FEE STATUS (COLLECT PAYMENT)
-// ==========================================
 app.patch('/api/admin/fees/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -505,7 +636,7 @@ app.patch('/api/admin/fees/:id', async (req, res) => {
 });
 
 // 1. GET SYSTEM SETTINGS & ANALYTICS
-// ==========================================
+
 app.get('/api/admin/settings', async (req, res) => {
   try {
     const settings = await settingsCollection.findOne({ type: "general_config" });
@@ -531,9 +662,9 @@ app.get('/api/admin/settings', async (req, res) => {
   }
 });
 
-// ==========================================
+
 // 2. UPDATE SYSTEM SETTINGS (PUT)
-// ==========================================
+
 app.put('/api/admin/settings', async (req, res) => {
   try {
     const { instituteName, academicYear, allowSelfSignup, maintenanceMode } = req.body;
@@ -556,13 +687,12 @@ app.put('/api/admin/settings', async (req, res) => {
   }
 });
 
-// GET: সকল নোটিশ দেখা (Student & Teacher Dashboard-এর জন্য)
+// GET: notices (Student & Teacher Dashboard-
 app.get('/api/notices', async (req, res) => {
   try {
     const { target } = req.query; // e.g. /api/notices?target=Students
     let query = {};
 
-    // স্টুডেন্ট বা টিচার ফিল্টার অনুযায়ী নোটিশ আনা
     if (target) {
       query = { targetAudience: { $in: ["All", target] } };
     }
@@ -634,9 +764,8 @@ app.delete('/api/admin/notices/:id', async (req, res) => {
 
 // task 2.1 teacher panel
 
-// ==========================================
+
 // 2. POST: Save/Upsert Student Attendance Record
-// ==========================================
 app.post('/api/teacher/attendance', async (req, res) => {
   try {
     const { date, classId, group, subject, records, teacherName } = req.body;
@@ -696,6 +825,141 @@ app.get('/api/teacher/students', async (req, res) => {
   } catch (error) {
     console.error("Error fetching students:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// task 2.3 
+
+// GET: Fetch Routine for Specific Teacher
+// Route: /api/teacher/routine/:teacherEmail
+
+app.get("/api/teacher/routine/:teacherEmail", async (req, res) => {
+  try {
+    const { teacherEmail } = req.params;
+    const { day } = req.query;
+
+    if (!teacherEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Teacher email is required",
+      });
+    }
+
+    // Email decode & trim
+    const decodedEmail = decodeURIComponent(teacherEmail).trim();
+
+    // Query for MongoDB - matching teacherId with email (Case-Insensitive)
+    let query = {
+      teacherId: { $regex: new RegExp(`^${decodedEmail}$`, "i") },
+    };
+
+    // Filter by day if provided and not "All"
+    if (day && day !== "All") {
+      query.day = day;
+    }
+
+    // Fetch matching routines from collection
+    const myRoutines = await routineCollection
+      .find(query)
+      .sort({ startTime: 1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      count: myRoutines.length,
+      routines: myRoutines,
+    });
+  } catch (error) {
+    console.error("Error fetching teacher routine:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while fetching teacher routine",
+    });
+  }
+});
+
+// task 2.4 marks 
+
+// ==========================================
+// 1. POST: Create or Update (Upsert) Marks
+// ==========================================
+app.post('/api/teacher/marks', async (req, res) => {
+  try {
+    const { classId, examType, subjectName, teacherEmail, marks } = req.body;
+
+    if (!classId || !examType || !subjectName || !marks || marks.length === 0) {
+      return res.status(400).json({ success: false, message: "Required fields missing" });
+    }
+
+    const operations = marks.map((item) => ({
+      updateOne: {
+        filter: {
+          studentId: item.studentId,
+          classId,
+          examType,
+          subjectName
+        },
+        update: {
+          $set: {
+            studentId: item.studentId,
+            studentName: item.studentName,
+            roll: item.roll,
+            classId,
+            examType,
+            subjectName,
+            teacherEmail,
+            obtainedMarks: Number(item.obtainedMarks) || 0,
+            updatedAt: new Date()
+          }
+        },
+        upsert: true
+      }
+    }));
+
+    await marksCollection.bulkWrite(operations);
+    res.status(200).json({ success: true, message: "Marks saved/updated successfully!" });
+  } catch (error) {
+    console.error("Error saving marks:", error);
+    res.status(500).json({ success: false, message: "Failed to save marks" });
+  }
+});
+
+
+// 2. GET: Read Marks (Filters: Class, Exam, Subject)
+
+app.get('/api/teacher/marks', async (req, res) => {
+  try {
+    const { classId, examType, subjectName } = req.query;
+    const query = {};
+
+    if (classId) query.classId = classId;
+    if (examType) query.examType = examType;
+    if (subjectName) query.subjectName = subjectName;
+
+    const existingMarks = await marksCollection.find(query).toArray();
+    res.status(200).json({ success: true, marks: existingMarks });
+  } catch (error) {
+    console.error("Error fetching marks:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch marks" });
+  }
+});
+
+
+// 3. DELETE: Clear Marks for Specific Exam & Subject
+
+app.delete('/api/teacher/marks', async (req, res) => {
+  try {
+    const { classId, examType, subjectName } = req.query;
+
+    if (!classId || !examType || !subjectName) {
+      return res.status(400).json({ success: false, message: "Class, Exam Type, and Subject are required" });
+    }
+
+    const result = await marksCollection.deleteMany({ classId, examType, subjectName });
+    res.status(200).json({ success: true, message: "Marks deleted successfully!", deletedCount: result.deletedCount });
+  } catch (error) {
+    console.error("Error deleting marks:", error);
+    res.status(500).json({ success: false, message: "Failed to delete marks" });
   }
 });
 
