@@ -62,13 +62,15 @@ async function run() {
     });
 
     // 🚀 TASK 1.2: GET ALL STUDENTS
+ // ==========================================
+// 🚀 TASK 1.2: GET ALL STUDENTS
 // ==========================================
 app.get('/api/admin/students', async (req, res) => {
   try {
-    // শুধুমাত্র role: "student" ফিল্টার করে ডাটা নেওয়া
+    // শুধুমাত্র role: "student" ফিল্টার করে ডাটা নেওয়া
     const students = await usersCollection
       .find({ role: "student" })
-      .project({ password: 0 }) // সিকিউরিটির জন্য পাসওয়ার্ড বাদ দেওয়া হয়েছে
+      .project({ password: 0 }) // সিকিউরিটির জন্য পাসওয়ার্ড বাদ দেওয়া হয়েছে
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -87,13 +89,14 @@ app.get('/api/admin/students', async (req, res) => {
 // ==========================================
 app.post('/api/admin/students', async (req, res) => {
   try {
-    const { name, email, password, studentId, department } = req.body;
+    // department এর জায়গায় class এবং group রিসিভ করা হচ্ছে
+    const { name, email, password, studentId, class: className, group } = req.body;
 
     // ১. ফিল্ড ভ্যালিডেশন
-    if (!name || !email || !password || !studentId || !department) {
+    if (!name || !email || !password || !studentId || !className) {
       return res.status(400).json({ 
         success: false, 
-        message: "All fields (name, email, password, studentId, department) are required." 
+        message: "All required fields (name, email, password, studentId, class) must be provided." 
       });
     }
 
@@ -109,17 +112,18 @@ app.post('/api/admin/students', async (req, res) => {
       });
     }
 
-    // ৩. পাসওয়ার্ড হ্যাশ করা (Better Auth Compatible)
+    // ৩. পাসওয়ার্ড হ্যাশ করা
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // ৪. নতুন স্টুডেন্ট ডাটা তৈরি
+    // ৪. নতুন স্টুডেন্ট অবজেক্ট তৈরি
     const newStudent = {
       name,
       email,
       password: hashedPassword,
       role: "student",
       studentId,
-      department,
+      class: className,
+      group: group || "General", // Class 6-8 এর জন্য ডিফল্ট General
       emailVerified: false,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -146,7 +150,7 @@ app.post('/api/admin/students', async (req, res) => {
 app.put('/api/admin/students/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, studentId, department } = req.body;
+    const { name, email, studentId, class: className, group } = req.body;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Student ID format" });
@@ -156,7 +160,8 @@ app.put('/api/admin/students/:id', async (req, res) => {
       name,
       email,
       studentId,
-      department,
+      class: className,
+      group: group || "General",
       updatedAt: new Date()
     };
 
@@ -209,7 +214,7 @@ app.delete('/api/admin/students/:id', async (req, res) => {
 
 // ==========================================
 // 🚀 TASK 1.3: GET ALL TEACHERS
-// ==========================================
+
 app.get('/api/admin/teachers', async (req, res) => {
   try {
     const teachers = await usersCollection
@@ -220,24 +225,24 @@ app.get('/api/admin/teachers', async (req, res) => {
 
     res.status(200).json({ success: true, teachers });
   } catch (error) {
+    console.error("Fetch Teachers Error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch teachers" });
   }
 });
 
 // ==========================================
-// 🚀 TASK 1.3: ADD NEW TEACHER (POST)
+//  TASK 1.3: ADD NEW TEACHER (POST)
 // ==========================================
 app.post('/api/admin/teachers', async (req, res) => {
   try {
-    const { name, email, password, designation, department } = req.body;
-
-    if (!name || !email || !password || !designation || !department) {
+    
+    const { name, email, password, designation, subject } = req.body;
+    if (!name || !email || !password || !designation || !subject) {
       return res.status(400).json({ 
         success: false, 
-        message: "All fields are required." 
+        message: "All fields (name, email, password, designation, subject) are required." 
       });
     }
-
     const existingUser = await usersCollection.findOne({ email });
     if (existingUser) {
       return res.status(400).json({
@@ -254,7 +259,7 @@ app.post('/api/admin/teachers', async (req, res) => {
       password: hashedPassword,
       role: "teacher",
       designation,
-      department,
+      subject,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -267,6 +272,7 @@ app.post('/api/admin/teachers', async (req, res) => {
       teacherId: result.insertedId
     });
   } catch (error) {
+    console.error("Add Teacher Error:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
@@ -277,15 +283,23 @@ app.post('/api/admin/teachers', async (req, res) => {
 app.put('/api/admin/teachers/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, designation, department } = req.body;
+    const { name, email, designation, subject } = req.body;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Teacher ID" });
     }
 
+    const updatedData = {
+      name,
+      email,
+      designation,
+      subject,
+      updatedAt: new Date()
+    };
+
     const result = await usersCollection.updateOne(
       { _id: new ObjectId(id), role: "teacher" },
-      { $set: { name, email, designation, department, updatedAt: new Date() } }
+      { $set: updatedData }
     );
 
     if (result.matchedCount === 0) {
@@ -294,6 +308,7 @@ app.put('/api/admin/teachers/:id', async (req, res) => {
 
     res.status(200).json({ success: true, message: "Teacher details updated!" });
   } catch (error) {
+    console.error("Update Teacher Error:", error);
     res.status(500).json({ success: false, message: "Failed to update teacher" });
   }
 });
@@ -317,6 +332,7 @@ app.delete('/api/admin/teachers/:id', async (req, res) => {
 
     res.status(200).json({ success: true, message: "Teacher deleted successfully!" });
   } catch (error) {
+    console.error("Delete Teacher Error:", error);
     res.status(500).json({ success: false, message: "Failed to delete teacher" });
   }
 });
@@ -375,17 +391,19 @@ app.patch('/api/admin/users/:id/access', async (req, res) => {
 
 // ==========================================
 // 1.5 STUDENT ATTENDANCE REPORT API (GET)
+// 1. STUDENT ATTENDANCE REPORT API (GET)
 // ==========================================
 app.get('/api/admin/attendance/students', async (req, res) => {
   try {
-    const { date, department } = req.query;
+    const { date, subject } = req.query;
 
     let query = {};
     if (date) {
       query.date = date; // Format: YYYY-MM-DD
     }
-    if (department && department !== "All") {
-      query.department = department;
+    // department এর পরিবর্তে subject দিয়ে ফিল্টার
+    if (subject && subject !== "All") {
+      query.subjectName = subject; // অথবা আপনার স্কিমা অনুযায়ী query.subject
     }
 
     const records = await attendanceCollection
@@ -395,6 +413,7 @@ app.get('/api/admin/attendance/students', async (req, res) => {
 
     res.status(200).json({ success: true, records });
   } catch (error) {
+    console.error("Student attendance fetch error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch student attendance records" });
   }
 });
@@ -404,17 +423,17 @@ app.get('/api/admin/attendance/students', async (req, res) => {
 // ==========================================
 app.get('/api/admin/attendance/teachers', async (req, res) => {
   try {
-    const { date, department } = req.query;
+    const { date, subject } = req.query;
 
     let query = {};
     if (date) {
       query.date = date; // Format: YYYY-MM-DD
     }
-    if (department && department !== "All") {
-      query.department = department;
+    // department এর পরিবর্তে subject দিয়ে ফিল্টার
+    if (subject && subject !== "All") {
+      query.subject = subject;
     }
 
-    // teacherAttendanceCollection থেকে ডাটা আনা হবে
     const records = await teacherAttendanceCollection
       .find(query)
       .sort({ createdAt: -1 })
@@ -422,6 +441,7 @@ app.get('/api/admin/attendance/teachers', async (req, res) => {
 
     res.status(200).json({ success: true, records });
   } catch (error) {
+    console.error("Teacher attendance fetch error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch teacher attendance records" });
   }
 });
@@ -612,6 +632,72 @@ app.delete('/api/admin/notices/:id', async (req, res) => {
 });
 
 
+// task 2.1 teacher panel
+
+// ==========================================
+// 2. POST: Save/Upsert Student Attendance Record
+// ==========================================
+app.post('/api/teacher/attendance', async (req, res) => {
+  try {
+    const { date, classId, group, subject, records, teacherName } = req.body;
+
+    if (!date || !classId || !subject || !records) {
+      return res.status(400).json({ success: false, message: "Missing required payload fields" });
+    }
+
+    // Filter constraint: same date, classId, group & subject Name
+    const filter = { 
+      date, 
+      classId, 
+      group: group || "General", 
+      subjectName: subject 
+    };
+
+    const updateDoc = {
+      $set: {
+        date,
+        classId,
+        group: group || "General",
+        subjectName: subject,
+        teacherName: teacherName || "Teacher",
+        students: records, // Array of { studentId, studentName, roll, status }
+        updatedAt: new Date()
+      }
+    };
+
+    // Upsert avoids duplicate records for same date, class, group, and subject
+    await attendanceCollection.updateOne(filter, updateDoc, { upsert: true });
+
+    res.status(200).json({ success: true, message: "Attendance saved successfully" });
+  } catch (error) {
+    console.error("Save attendance error:", error);
+    res.status(500).json({ success: false, message: "Failed to record attendance" });
+  }
+});
+app.get('/api/teacher/students', async (req, res) => {
+  try {
+    const { classId, group } = req.query;
+
+    let query = { role: "student" };
+
+    if (classId) {
+      query.class = classId; // e.g. "Class 8", "Class 9"
+    }
+
+    if (group) {
+      query.group = group; // e.g. "General", "Science", "Arts", "Commerce"
+    }
+
+    const students = await usersCollection
+      .find(query)
+      .toArray();
+
+    res.status(200).json({ success: true, students });
+  } catch (error) {
+    console.error("Error fetching students:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
 
 
 
