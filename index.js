@@ -1480,8 +1480,6 @@ app.get("/api/student/routine", async (req, res) => {
       .find(routineQuery)
       .sort({ startTime: 1 })
       .toArray();
-
-    // ৩. বার (Day) অনুযায়ী ডাটা গ্রুপ করা
     const daysOrder = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     
     const weeklyRoutine = daysOrder.map((day) => {
@@ -1513,6 +1511,96 @@ app.get("/api/student/routine", async (req, res) => {
 
   } catch (error) {
     console.error("Student Routine API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// GET: Student Full Attendance API
+// GET: Student Attendance API
+app.get("/api/student/attendance", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    // ১. user collection 
+    const student = await usersCollection.findOne({ email, role: "student" });
+    if (!student) {
+      return res.status(404).json({ success: false, message: "Student profile not found" });
+    }
+
+    const { _id, studentId, class: userClass, classId, group } = student;
+    const currentClass = classId || userClass;
+
+    // ২. attendance collection 
+    const attendanceQuery = {
+      $or: [{ classId: currentClass }, { class: currentClass }]
+    };
+    if (group) attendanceQuery.group = group;
+
+    const allRecords = await attendanceCollection.find(attendanceQuery).toArray();
+
+    let totalClassesAll = 0;
+    let presentClassesAll = 0;
+    const subjectWiseMap = {};
+    const recentLogs = [];
+
+    allRecords.forEach((record) => {
+      const studentList = record.records || record.students || [];
+      const match = studentList.find(
+        (s) => s.studentId?.toString() === studentId?.toString() || s.studentId?.toString() === _id.toString()
+      );
+
+      if (match) {
+        totalClassesAll += 1;
+        const isPresent = match.status === "Present";
+        if (isPresent) presentClassesAll += 1;
+        const subName = record.subject || record.subjectName || "General";
+        if (!subjectWiseMap[subName]) {
+          subjectWiseMap[subName] = { subjectName: subName, total: 0, present: 0 };
+        }
+        subjectWiseMap[subName].total += 1;
+        if (isPresent) subjectWiseMap[subName].present += 1;
+        recentLogs.push({
+          id: record._id,
+          date: record.date || new Date(record.updatedAt || record.createdAt).toISOString().split("T")[0],
+          subjectName: subName,
+          status: match.status,
+          teacherName: record.teacherName || match.teacherName || "Instructor"
+        });
+      }
+    });
+
+    const overallPercentage = totalClassesAll > 0 
+      ? Math.round((presentClassesAll / totalClassesAll) * 100) 
+      : 0;
+
+    const subjectWiseStats = Object.values(subjectWiseMap).map((sub) => ({
+      subjectName: sub.subjectName,
+      total: sub.total,
+      present: sub.present,
+      percentage: sub.total > 0 ? Math.round((sub.present / sub.total) * 100) : 0
+    }));
+    recentLogs.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        overall: {
+          totalClasses: totalClassesAll,
+          presentCount: presentClassesAll,
+          absentCount: totalClassesAll - presentClassesAll,
+          percentage: overallPercentage
+        },
+        subjectWiseStats,
+        recentLogs
+      }
+    });
+
+  } catch (error) {
+    console.error("Student Attendance API Error:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
