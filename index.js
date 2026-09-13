@@ -1242,6 +1242,101 @@ app.get('/api/teacher/my-students', async (req, res) => {
 
 
 
+app.get('/api/teacher/attendance-status', async (req, res) => {
+  try {
+    const { teacherEmail } = req.query;
+    if (!teacherEmail) {
+      return res.status(400).json({ success: false, message: "Teacher email required" });
+    }
+
+    // আজকের তারিখ বের করা (YYYY-MM-DD)
+    const today = new Date().toISOString().split('T')[0];
+
+    const attendanceRecord = await teacherAttendanceCollection.findOne({
+      teacherId: teacherEmail,
+      date: today
+    });
+
+    if (attendanceRecord) {
+      return res.json({
+        success: true,
+        hasCheckedIn: true,
+        attendance: attendanceRecord
+      });
+    }
+
+    res.json({
+      success: true,
+      hasCheckedIn: false,
+      attendance: null
+    });
+  } catch (error) {
+    console.error("Error fetching attendance status:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ২. API
+app.post('/api/teacher/check-in', async (req, res) => {
+  try {
+    const { teacherEmail, teacherName } = req.body;
+
+    if (!teacherEmail || !teacherName) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const now = new Date();
+    const today = now.toISOString().split('T')[0]; // "2026-09-13"
+    
+    //  (As: "08:15 AM")
+    const formattedTime = now.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+    const existingCheckIn = await teacherAttendanceCollection.findOne({
+      teacherId: teacherEmail,
+      date: today
+    });
+
+    if (existingCheckIn) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "You have already checked in today!" 
+      });
+    }
+
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    let attendanceStatus = "Present";
+
+    if (currentHour > 9 || (currentHour === 9 && currentMinute > 0)) {
+      attendanceStatus = "Late";
+    }
+
+    const newAttendance = {
+      teacherId: teacherEmail,
+      teacherName: teacherName,
+      date: today,
+      inTime: formattedTime,
+      status: attendanceStatus,
+      createdAt: now
+    };
+
+    const result = await teacherAttendanceCollection.insertOne(newAttendance);
+
+    res.status(201).json({
+      success: true,
+      message: `Checked in successfully as ${attendanceStatus}!`,
+      attendance: { ...newAttendance, _id: result.insertedId }
+    });
+
+  } catch (error) {
+    console.error("Error during check-in:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
