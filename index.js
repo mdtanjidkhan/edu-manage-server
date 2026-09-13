@@ -410,6 +410,7 @@ app.get('/api/admin/attendance/students', async (req, res) => {
 // ==========================================
 // 2. TEACHER ATTENDANCE REPORT API (GET)
 // ==========================================
+
 app.get('/api/admin/attendance/teachers', async (req, res) => {
   try {
     const { date, subject } = req.query;
@@ -749,7 +750,7 @@ app.patch('/api/admin/notices/:id', async (req, res) => {
   }
 });
 
-// DELETE: নোটিশ ডিলিট করা (Admin Only)
+
 app.delete('/api/admin/notices/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -766,43 +767,63 @@ app.delete('/api/admin/notices/:id', async (req, res) => {
 
 
 // 2. POST: Save/Upsert Student Attendance Record
-app.post('/api/teacher/attendance', async (req, res) => {
+// POST: Save or Update Attendance
+app.post("/api/teacher/attendance", async (req, res) => {
   try {
-    const { date, classId, group, subject, records, teacherName } = req.body;
+    const { date, classId, group, subject, records, teacherEmail } = req.body;
 
-    if (!date || !classId || !subject || !records) {
-      return res.status(400).json({ success: false, message: "Missing required payload fields" });
+    // ১. প্রয়োজনীয় Field ফিল্টারিং ও ভ্যালিডেশন
+    if (!date || !classId || !subject || !records || !teacherEmail) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Missing required fields (date, classId, subject, records, or teacherEmail)" 
+      });
     }
 
-    // Filter constraint: same date, classId, group & subject Name
-    const filter = { 
-      date, 
-      classId, 
-      group: group || "General", 
-      subjectName: subject 
-    };
+    // ২. Database থেকে logged-in teacher-এর তথ্য খুঁজে বের করা
+    const teacher = await usersCollection.findOne({ email: teacherEmail });
 
+    if (!teacher) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Teacher account not found in the database" 
+      });
+    }
+
+    // ৩. Filter এবং Upsert Payload প্রস্তুত করা
+    const filter = { date, classId, group, subject,teacherEmail };
+    
     const updateDoc = {
       $set: {
         date,
         classId,
-        group: group || "General",
-        subjectName: subject,
-        teacherName: teacherName || "Teacher",
-        students: records, // Array of { studentId, studentName, roll, status }
+        group,
+        subject,
+        records,
+        teacherEmail: teacher.email, // Logged-in teacher email
+        teacherName: teacher.name,   // Logged-in teacher actual name (from db)
         updatedAt: new Date()
       }
     };
 
-    // Upsert avoids duplicate records for same date, class, group, and subject
-    await attendanceCollection.updateOne(filter, updateDoc, { upsert: true });
+    // ৪. Attendance Collection-এ Save বা Update করা
+    const result = await attendanceCollection.updateOne(filter, updateDoc, { upsert: true });
 
-    res.status(200).json({ success: true, message: "Attendance saved successfully" });
+    res.json({ 
+      success: true, 
+      message: "Attendance recorded successfully",
+      data: result 
+    });
+
   } catch (error) {
-    console.error("Save attendance error:", error);
-    res.status(500).json({ success: false, message: "Failed to record attendance" });
+    console.error("Attendance save error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Internal server error while saving attendance" 
+    });
   }
 });
+
 app.get('/api/teacher/students', async (req, res) => {
   try {
     const { classId, group } = req.query;
@@ -885,12 +906,20 @@ app.get("/api/teacher/routine/:teacherEmail", async (req, res) => {
 // ==========================================
 app.post('/api/teacher/marks', async (req, res) => {
   try {
-    const { classId, examType, subjectName, teacherEmail, marks } = req.body;
-
-    if (!classId || !examType || !subjectName || !marks || marks.length === 0) {
-      return res.status(400).json({ success: false, message: "Required fields missing" });
+    const { classId, examType, subjectName, marks, teacherEmail } = req.body;
+    if (!classId || !examType || !subjectName || !marks || !Array.isArray(marks) || marks.length === 0) {
+      return res.status(400).json({ success: false, message: "Required fields missing or invalid marks payload" });
     }
 
+    if (!teacherEmail) {
+      return res.status(400).json({ success: false, message: "Teacher email is required. Please log in again." });
+    }
+    const teacher = await usersCollection.findOne({ email: teacherEmail });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: "Teacher account not found in database" });
+    }
+
+    // ৩. MongoDB Bulk Write Operation
     const operations = marks.map((item) => ({
       updateOne: {
         filter: {
@@ -902,12 +931,13 @@ app.post('/api/teacher/marks', async (req, res) => {
         update: {
           $set: {
             studentId: item.studentId,
-            studentName: item.studentName,
-            roll: item.roll,
+            studentName: item.studentName || "N/A",
+            roll: item.roll || "N/A",
             classId,
             examType,
             subjectName,
-            teacherEmail,
+            teacherEmail: teacher.email, // টিচারের ইমেইল স্ট্রিং
+            teacherName: teacher.name || "", // টিচারের নাম
             obtainedMarks: Number(item.obtainedMarks) || 0,
             updatedAt: new Date()
           }
@@ -960,6 +990,253 @@ app.delete('/api/teacher/marks', async (req, res) => {
   } catch (error) {
     console.error("Error deleting marks:", error);
     res.status(500).json({ success: false, message: "Failed to delete marks" });
+  }
+});
+
+app.get('/api/teacher/dashboard-stats', async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Teacher email is required"
+      });
+    }
+    // 1. Today's Classes
+    const todayName = new Date().toLocaleDateString('en-US', {
+      weekday: 'long'
+    });
+
+    let todaysClasses = 0;
+
+    if (typeof routineCollection !== "undefined") {
+      todaysClasses = await routineCollection.countDocuments({
+        teacherId: email,
+        day: todayName
+      });
+    }
+    // 2. Total Students
+
+    let totalStudents = 0;
+
+    if (typeof usersCollection !== "undefined") {
+      totalStudents = await usersCollection.countDocuments({
+        role: "student"
+      });
+    }
+    // ================================
+    // 3. Today's Attendance Status
+    let isAttendanceTaken = false;
+
+    if (typeof attendanceCollection !== "undefined") {
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      const todayAttendance =
+        await attendanceCollection.findOne({
+          teacherEmail: email,
+          date: todayStr
+        });
+
+      isAttendanceTaken = !!todayAttendance;
+    }
+    // 4. Pending Marks
+    let pendingMarks = 0;
+
+    if (
+      typeof marksCollection !== "undefined" &&
+      typeof routineCollection !== "undefined"
+    ) {
+
+      // Get teacher's assigned routines
+      const teacherRoutines = await routineCollection
+        .find({
+          teacherId: email
+        })
+        .project({
+          classId: 1,
+          className: 1,
+          subjectName: 1
+        })
+        .toArray();
+
+
+      // --------------------------------
+      // Create unique Class + Subject
+      // combinations
+      const assignedSubjects = new Set();
+
+      teacherRoutines.forEach((routine) => {
+
+        const className =
+          routine.classId ||
+          routine.className;
+
+        const subjectName =
+          routine.subjectName;
+
+        if (className && subjectName) {
+          assignedSubjects.add(
+            `${className}|||${subjectName}`
+          );
+        }
+      });
+
+
+      // Exams that teacher needs to submit
+      const examTypes = [
+        "First Term",
+        "Midterm",
+        "Final Exam"
+      ];
+
+
+      // --------------------------------
+      // Check submitted marks
+      // --------------------------------
+
+      const submittedMarks = await marksCollection
+        .find({
+          teacherEmail: email
+        })
+        .project({
+          classId: 1,
+          subjectName: 1,
+          examType: 1
+        })
+        .toArray();
+
+
+      // --------------------------------
+      // Create Set of submitted
+      // Class + Subject + Exam
+      // --------------------------------
+
+      const submittedSet = new Set();
+
+      submittedMarks.forEach((mark) => {
+
+        if (
+          mark.classId &&
+          mark.subjectName &&
+          mark.examType
+        ) {
+
+          submittedSet.add(
+            `${mark.classId}|||${mark.subjectName}|||${mark.examType}`
+          );
+
+        }
+      });
+      // --------------------------------
+      // Calculate Pending
+      // --------------------------------
+      assignedSubjects.forEach((assignment) => {
+
+        const [className, subjectName] =
+          assignment.split("|||");
+
+        examTypes.forEach((examType) => {
+
+          const key =
+            `${className}|||${subjectName}|||${examType}`;
+
+          if (!submittedSet.has(key)) {
+            pendingMarks++;
+          }
+
+        });
+
+      });
+
+    }
+ // ================================
+    // Final Response
+    // ================================
+
+    res.status(200).json({
+      success: true,
+
+      stats: {
+        todaysClasses,
+        totalStudents,
+        pendingMarks,
+        isAttendanceTaken
+      }
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Teacher Dashboard Stats Error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch dashboard stats",
+      error: error.message
+    });
+
+  }
+});
+
+//  my students list for teacher
+ 
+app.get('/api/teacher/my-students', async (req, res) => {
+  try {
+    const { teacherEmail } = req.query;
+
+    if (!teacherEmail) {
+      return res.status(400).json({ success: false, message: "Teacher email is required" });
+    }
+
+    const teacherRoutines = await routineCollection.find({ teacherId: teacherEmail }).toArray();
+
+    if (!teacherRoutines || teacherRoutines.length === 0) {
+      return res.json({ 
+        success: true, 
+        students: [], 
+        assignedClasses: [] 
+      });
+    }
+    const classGroupFilters = [];
+    const uniqueClassesSet = new Set();
+
+    teacherRoutines.forEach(routine => {
+      if (routine.classId) {
+        uniqueClassesSet.add(routine.classId);
+      
+        const exists = classGroupFilters.some(
+          item => item.class === routine.classId && item.group === routine.group
+        );
+
+        if (!exists) {
+          const filterObj = { class: routine.classId };
+          if (routine.group) {
+            filterObj.group = routine.group;
+          }
+          classGroupFilters.push(filterObj);
+        }
+      }
+    });
+    let students = [];
+    if (classGroupFilters.length > 0) {
+      students = await usersCollection.find({
+        role: "student",
+        $or: classGroupFilters
+      }).toArray();
+    }
+
+    res.json({
+      success: true,
+      assignedClasses: Array.from(uniqueClassesSet), // ["Class 8", ...]
+      students: students
+    });
+
+  } catch (error) {
+    console.error("Error fetching teacher's students:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
