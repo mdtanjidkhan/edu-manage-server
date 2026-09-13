@@ -1337,6 +1337,123 @@ app.post('/api/teacher/check-in', async (req, res) => {
   }
 });
 
+// GET: Student Dashboard Overview API
+app.get("/api/student/dashboard", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Student email is required" 
+      });
+    }
+
+    const student = await usersCollection.findOne({ email, role: "student" });
+    if (!student) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Student profile not found" 
+      });
+    }
+
+    const { _id, studentId, class: userClass, classId, group, name } = student;
+    const currentClass = classId || userClass; // classId অথবা class যেটিই অবজেক্টে থাকুক
+
+    const attendanceQuery = {
+      $or: [{ classId: currentClass }, { class: currentClass }]
+    };
+    if (group) attendanceQuery.group = group;
+
+    const attendanceRecords = await attendanceCollection.find(attendanceQuery).toArray();
+
+    let totalClasses = 0;
+    let presentCount = 0;
+
+    attendanceRecords.forEach((record) => {
+      const match = record.students?.find(
+        (s) => s.studentId?.toString() === studentId?.toString() || s.studentId?.toString() === _id.toString()
+      );
+      if (match) {
+        totalClasses += 1;
+        if (match.status === "Present") presentCount += 1;
+      }
+    });
+
+    const attendancePercentage = totalClasses > 0 
+      ? Math.round((presentCount / totalClasses) * 100) 
+      : 0;
+    const todayName = new Date().toLocaleDateString("en-US", { weekday: "long" });
+    
+    const routineQuery = { 
+      day: todayName,
+      $or: [{ classId: currentClass }, { class: currentClass }]
+    };
+    if (group) routineQuery.group = group;
+
+    const todayClasses = await routineCollection
+      .find(routineQuery)
+      .sort({ startTime: 1 })
+      .toArray();
+    const notices = await noticeCollection
+      .find({
+        $or: [
+          { targetAudience: "All" }, 
+          { targetAudience: "Students" }, 
+          { classId: currentClass },
+          { class: currentClass }
+        ]
+      })
+      .sort({ createdAt: -1 })
+      .limit(3)
+      .toArray();
+
+    // 5. রেসপন্স পাঠানো
+    return res.status(200).json({
+      success: true,
+      data: {
+        profile: { 
+          name, 
+          studentId: studentId || "N/A", 
+          class: currentClass, 
+          group: group || "General" 
+        },
+        stats: { 
+          attendancePercentage, 
+          presentCount, 
+          totalClasses 
+        },
+        todayClasses: todayClasses.map((c) => ({
+          id: c._id,
+          subjectName: c.subjectName,
+          teacherName: c.teacherName || "Instructor",
+          startTime: c.startTime,
+          endTime: c.endTime,
+          roomNo: c.roomNo || "N/A"
+        })),
+        notices: notices.map((n) => ({
+          id: n._id,
+          title: n.title,
+          description: n.description,
+          category: n.category || "General",
+          date: new Date(n.createdAt).toLocaleDateString("en-US", { 
+            month: "short", 
+            day: "numeric" 
+          })
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error("Student Dashboard API Error:", error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Internal server error" 
+    });
+  }
+});
+
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
