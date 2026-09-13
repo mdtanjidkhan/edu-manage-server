@@ -1605,6 +1605,106 @@ app.get("/api/student/attendance", async (req, res) => {
   }
 });
 
+// GET: Student Exam Results API
+app.get("/api/student/results", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    // ১. user collection থেকে স্টুডেন্ট খুঁজে বের করা
+    const student = await usersCollection.findOne({ email, role: "student" });
+    if (!student) {
+      return res.status(404).json({ success: false, message: "Student profile not found" });
+    }
+
+    const { _id, studentId, class: userClass, classId } = student;
+    const currentClass = classId || userClass;
+
+    // ২. marks collection থেকে স্টুডেন্টের সব মার্কস বের করা
+    const markRecords = await marksCollection
+      .find({
+        $or: [
+          { studentId: studentId?.toString() },
+          { studentId: _id?.toString() }
+        ]
+      })
+      .toArray();
+
+    // ৩. examType অনুযায়ী রেজাল্ট সাজানো
+    const examMap = {};
+
+    markRecords.forEach((record) => {
+      const examName = record.examType || record.examName || record.term || "Final Exam";
+      const subjectName = record.subjectName || record.subject || "Subject";
+      const obtainedMarks = Number(record.obtainedMarks || record.marks || 0);
+      const totalMarks = Number(record.totalMarks || 100);
+
+      // গ্রেড ও জিপিএ ক্যালকুলেশন
+      const calculateGrade = (score, max) => {
+        const percentage = (score / max) * 100;
+        if (percentage >= 80) return { grade: "A+", point: 5.0 };
+        if (percentage >= 70) return { grade: "A", point: 4.0 };
+        if (percentage >= 60) return { grade: "A-", point: 3.5 };
+        if (percentage >= 50) return { grade: "B", point: 3.0 };
+        if (percentage >= 40) return { grade: "C", point: 2.0 };
+        if (percentage >= 33) return { grade: "D", point: 1.0 };
+        return { grade: "F", point: 0.0 };
+      };
+
+      const { grade, point } = calculateGrade(obtainedMarks, totalMarks);
+
+      if (!examMap[examName]) {
+        examMap[examName] = {
+          examName,
+          subjects: []
+        };
+      }
+
+      examMap[examName].subjects.push({
+        id: record._id,
+        subjectName,
+        obtainedMarks,
+        totalMarks,
+        grade,
+        point
+      });
+    });
+
+    // ৪. প্রতিটি পরীক্ষার জন্য ওভারঅল GPA হিসাব করা
+    const examResults = Object.values(examMap).map((exam) => {
+      const totalPoints = exam.subjects.reduce((sum, s) => sum + s.point, 0);
+      const hasFailed = exam.subjects.some((s) => s.grade === "F");
+      const gpa = hasFailed || exam.subjects.length === 0 
+        ? "0.00 (F)" 
+        : (totalPoints / exam.subjects.length).toFixed(2);
+
+      return {
+        examName: exam.examName,
+        gpa,
+        subjects: exam.subjects
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        className: currentClass,
+        examResults
+      }
+    });
+
+  } catch (error) {
+    console.error("Student Results API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+
+
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
