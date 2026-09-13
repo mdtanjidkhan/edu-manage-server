@@ -1452,7 +1452,70 @@ app.get("/api/student/dashboard", async (req, res) => {
     });
   }
 });
+// GET: Student Full Routine API
+app.get("/api/student/routine", async (req, res) => {
+  try {
+    const { email } = req.query;
 
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    // ১. user collection থেকে স্টুডেন্ট প্রোফাইল বের করা
+    const student = await usersCollection.findOne({ email, role: "student" });
+    if (!student) {
+      return res.status(404).json({ success: false, message: "Student profile not found" });
+    }
+
+    const currentClass = student.classId || student.class;
+    const group = student.group;
+
+    // ২. routine collection থেকে স্টুডেন্টের ক্লাসের সব রুটিন নিয়ে আসা
+    const routineQuery = {
+      $or: [{ classId: currentClass }, { class: currentClass }]
+    };
+    if (group) routineQuery.group = group;
+
+    const allRoutines = await routineCollection
+      .find(routineQuery)
+      .sort({ startTime: 1 })
+      .toArray();
+
+    // ৩. বার (Day) অনুযায়ী ডাটা গ্রুপ করা
+    const daysOrder = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    
+    const weeklyRoutine = daysOrder.map((day) => {
+      const classesForDay = allRoutines
+        .filter((r) => r.day === day)
+        .map((c) => ({
+          id: c._id,
+          subjectName: c.subjectName,
+          teacherName: c.teacherName || "Instructor",
+          startTime: c.startTime,
+          endTime: c.endTime,
+          roomNo: c.roomNo || "N/A"
+        }));
+
+      return {
+        day,
+        classes: classesForDay
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        className: currentClass,
+        group: group || "General",
+        weeklyRoutine
+      }
+    });
+
+  } catch (error) {
+    console.error("Student Routine API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
 
 
     // Send a ping to confirm a successful connection
