@@ -1869,6 +1869,149 @@ app.get("/api/student/results", async (req, res) => {
 });
 
 
+// STUDENT ASSIGNMENT APIs
+// ১. GET: Student Assignments List with Status
+app.get("/api/student/assignments", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    // স্টুডেন্ট প্রোফাইল বের করা
+    const student = await usersCollection.findOne({ email, role: "student" });
+    if (!student) {
+      return res.status(404).json({ success: false, message: "Student profile not found" });
+    }
+
+    const currentClass = student.classId || student.class;
+    const studentGroup = student.group || "General";
+
+    // স্টুডেন্টের ক্লাসের অ্যাসাইনমেন্ট ফিল্টার করা
+    const assignmentQuery = {
+      $or: [{ classId: currentClass }, { class: currentClass }]
+    };
+
+    // Class 9/10 এর ক্ষেত্রে গ্রুপ ফিল্টার প্রযোজ্য
+    if (currentClass === "Class 9" || currentClass === "Class 10") {
+      assignmentQuery.group = studentGroup;
+    }
+
+    const assignments = await assignmentsCollection
+      .find(assignmentQuery)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const studentIdStr = student.studentId?.toString() || student._id.toString();
+
+    
+    const assignmentsWithStatus = await Promise.all(
+      assignments.map(async (item) => {
+        const submission = await submissionsCollection.findOne({
+          assignmentId: item._id.toString(),
+          $or: [{ studentId: studentIdStr }, { studentEmail: email }]
+        });
+
+        const now = new Date();
+        const deadline = new Date(item.deadline);
+
+        let status = "Pending";
+        if (submission) {
+          status = submission.status || "Submitted";
+        } else if (now > deadline) {
+          status = "Late";
+        }
+
+        return {
+          id: item._id,
+          title: item.title,
+          subject: item.subject,
+          teacherName: item.teacherName || "Instructor",
+          description: item.description,
+          deadline: item.deadline,
+          status, // Pending | Submitted | Late | Completed
+          submission: submission
+            ? {
+                submissionText: submission.submissionText,
+                fileUrl: submission.fileUrl,
+                submittedAt: submission.submittedAt,
+                marks: submission.marks
+              }
+            : null
+        };
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: assignmentsWithStatus
+    });
+
+  } catch (error) {
+    console.error("Student Assignments API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ২. POST: Submit Assignment Solution
+app.post("/api/student/assignments/submit", async (req, res) => {
+  try {
+    const { assignmentId, studentEmail, submissionText, fileUrl } = req.body;
+
+    if (!assignmentId || !studentEmail || (!submissionText && !fileUrl)) {
+      return res.status(400).json({
+        success: false,
+        message: "Assignment ID, student email, and answer text/file link are required"
+      });
+    }
+
+    const student = await usersCollection.findOne({ email: studentEmail, role: "student" });
+    if (!student) {
+      return res.status(404).json({ success: false, message: "Student profile not found" });
+    }
+
+    const assignment = await assignmentsCollection.findOne({ _id: new (require("mongodb").ObjectId)(assignmentId) });
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: "Assignment not found" });
+    }
+
+    const now = new Date();
+    const deadline = new Date(assignment.deadline);
+    const isLate = now > deadline;
+
+    const studentIdStr = student.studentId?.toString() || student._id.toString();
+
+    const submissionData = {
+      assignmentId,
+      studentId: studentIdStr,
+      studentEmail,
+      studentName: student.name || "Student",
+      submissionText: submissionText || "",
+      fileUrl: fileUrl || "",
+      submittedAt: now,
+      status: isLate ? "Late" : "Submitted",
+      marks: null
+    };
+    await submissionsCollection.updateOne(
+      { assignmentId, $or: [{ studentId: studentIdStr }, { studentEmail }] },
+      { $set: submissionData },
+      { upsert: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: isLate
+        ? "Assignment submitted (Marked as Late)"
+        : "Assignment submitted successfully!"
+    });
+
+  } catch (error) {
+    console.error("Student Submit Assignment API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
 
 
 
