@@ -35,7 +35,10 @@ async function run() {
     const noticeCollection = db.collection("notices");
     const routineCollection = db.collection("routine");
     const marksCollection = db.collection("marks");
-    // ==========================================
+    const assignmentsCollection = db.collection("assignments");
+    const submissionsCollection = db.collection("submissions");
+
+
     // 🚀 TASK 1.1: ADMIN STATS API
     // ==========================================
     app.get('/api/admin/stats', async (req, res) => {
@@ -992,6 +995,169 @@ app.delete('/api/teacher/marks', async (req, res) => {
     res.status(500).json({ success: false, message: "Failed to delete marks" });
   }
 });
+
+
+
+// TEACHER ASSIGNMENT MANAGEMENT APIs
+// ১. POST: Teacher Assignment Publish API
+app.post("/api/teacher/assignments", async (req, res) => {
+  try {
+    const { 
+      title, 
+      subject, 
+      classId, 
+      group, 
+      description, 
+      deadline, 
+      teacherEmail, 
+      teacherName 
+    } = req.body;
+    if (!title || !subject || !classId || !deadline || !teacherEmail) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Required fields: title, subject, classId, deadline, teacherEmail" 
+      });
+    }
+
+    const newAssignment = {
+      title,
+      subject,
+      classId,
+      group: group || "General",
+      description: description || "",
+      deadline: new Date(deadline), // ISO Date Format
+      teacherEmail,
+      teacherName: teacherName || "Teacher",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await assignmentsCollection.insertOne(newAssignment);
+
+    return res.status(201).json({
+      success: true,
+      message: "Assignment published successfully!",
+      assignmentId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("Teacher Publish Assignment API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ২. GET: Teacher Posted Assignments List API
+app.get("/api/teacher/assignments", async (req, res) => {
+  try {
+    const { teacherEmail } = req.query;
+
+    if (!teacherEmail) {
+      return res.status(400).json({ success: false, message: "Teacher email is required" });
+    }
+    const assignments = await assignmentsCollection
+      .find({ teacherEmail })
+      .sort({ createdAt: -1 })
+      .toArray();
+    const assignmentsWithStats = await Promise.all(
+      assignments.map(async (item) => {
+        const totalSubmissions = await submissionsCollection.countDocuments({
+          assignmentId: item._id.toString()
+        });
+
+        return {
+          id: item._id,
+          title: item.title,
+          subject: item.subject,
+          classId: item.classId,
+          group: item.group,
+          description: item.description,
+          deadline: item.deadline,
+          createdAt: item.createdAt,
+          totalSubmissions
+        };
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: assignmentsWithStats
+    });
+
+  } catch (error) {
+    console.error("Teacher Fetch Assignments API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+
+// PUT: Teacher Update Assignment API
+app.put("/api/teacher/assignments/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, subject, classId, group, description, deadline } = req.body;
+    const { ObjectId } = require("mongodb");
+
+    if (!title || !subject || !classId || !deadline) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Required fields: title, subject, classId, deadline" 
+      });
+    }
+
+    const updatedData = {
+      title,
+      subject,
+      classId,
+      group: group || "General",
+      description: description || "",
+      deadline: new Date(deadline),
+      updatedAt: new Date()
+    };
+
+    const result = await assignmentsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "Assignment not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Assignment updated successfully!"
+    });
+
+  } catch (error) {
+    console.error("Teacher Update Assignment API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ৩. DELETE: Teacher Assignment Delete API
+app.delete("/api/teacher/assignments/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+  
+    const result = await assignmentsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "Assignment not found" });
+    }
+
+    await submissionsCollection.deleteMany({ assignmentId: id });
+
+    return res.status(200).json({
+      success: true,
+      message: "Assignment and related submissions deleted successfully!"
+    });
+
+  } catch (error) {
+    console.error("Teacher Delete Assignment API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
 
 app.get('/api/teacher/dashboard-stats', async (req, res) => {
   try {
