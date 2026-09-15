@@ -1406,6 +1406,29 @@ app.get('/api/teacher/my-students', async (req, res) => {
   }
 });
 
+// GET: Teacher Fetch Submissions for a Specific Assignment
+app.get("/api/teacher/assignments/:id/submissions", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if assignment exists
+    const submissions = await submissionsCollection
+      .find({ assignmentId: id })
+      .sort({ submittedAt: -1 })
+      .toArray();
+
+    return res.status(200).json({
+      success: true,
+      data: submissions
+    });
+
+  } catch (error) {
+    console.error("Fetch Assignment Submissions API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+
 
 
 app.get('/api/teacher/attendance-status', async (req, res) => {
@@ -1627,7 +1650,7 @@ app.get("/api/student/routine", async (req, res) => {
       return res.status(400).json({ success: false, message: "Email is required" });
     }
 
-    // ১. user collection থেকে স্টুডেন্ট প্রোফাইল বের করা
+    // ১. user collection 
     const student = await usersCollection.findOne({ email, role: "student" });
     if (!student) {
       return res.status(404).json({ success: false, message: "Student profile not found" });
@@ -1636,7 +1659,7 @@ app.get("/api/student/routine", async (req, res) => {
     const currentClass = student.classId || student.class;
     const group = student.group;
 
-    // ২. routine collection থেকে স্টুডেন্টের ক্লাসের সব রুটিন নিয়ে আসা
+    // ২. routine collection 
     const routineQuery = {
       $or: [{ classId: currentClass }, { class: currentClass }]
     };
@@ -1780,7 +1803,7 @@ app.get("/api/student/results", async (req, res) => {
       return res.status(400).json({ success: false, message: "Email is required" });
     }
 
-    // ১. user collection থেকে স্টুডেন্ট খুঁজে বের করা
+    // ১. user collection 
     const student = await usersCollection.findOne({ email, role: "student" });
     if (!student) {
       return res.status(404).json({ success: false, message: "Student profile not found" });
@@ -1789,7 +1812,7 @@ app.get("/api/student/results", async (req, res) => {
     const { _id, studentId, class: userClass, classId } = student;
     const currentClass = classId || userClass;
 
-    // ২. marks collection থেকে স্টুডেন্টের সব মার্কস বের করা
+    // ২. marks collection 
     const markRecords = await marksCollection
       .find({
         $or: [
@@ -1799,7 +1822,7 @@ app.get("/api/student/results", async (req, res) => {
       })
       .toArray();
 
-    // ৩. examType অনুযায়ী রেজাল্ট সাজানো
+    // ৩. examType 
     const examMap = {};
 
     markRecords.forEach((record) => {
@@ -1808,7 +1831,7 @@ app.get("/api/student/results", async (req, res) => {
       const obtainedMarks = Number(record.obtainedMarks || record.marks || 0);
       const totalMarks = Number(record.totalMarks || 100);
 
-      // গ্রেড ও জিপিএ ক্যালকুলেশন
+      // 
       const calculateGrade = (score, max) => {
         const percentage = (score / max) * 100;
         if (percentage >= 80) return { grade: "A+", point: 5.0 };
@@ -1839,7 +1862,7 @@ app.get("/api/student/results", async (req, res) => {
       });
     });
 
-    // ৪. প্রতিটি পরীক্ষার জন্য ওভারঅল GPA হিসাব করা
+    // ৪.
     const examResults = Object.values(examMap).map((exam) => {
       const totalPoints = exam.subjects.reduce((sum, s) => sum + s.point, 0);
       const hasFailed = exam.subjects.some((s) => s.grade === "F");
@@ -1878,8 +1901,6 @@ app.get("/api/student/assignments", async (req, res) => {
     if (!email) {
       return res.status(400).json({ success: false, message: "Email is required" });
     }
-
-    // স্টুডেন্ট প্রোফাইল বের করা
     const student = await usersCollection.findOne({ email, role: "student" });
     if (!student) {
       return res.status(404).json({ success: false, message: "Student profile not found" });
@@ -1888,7 +1909,6 @@ app.get("/api/student/assignments", async (req, res) => {
     const currentClass = student.classId || student.class;
     const studentGroup = student.group || "General";
 
-    // স্টুডেন্টের ক্লাসের অ্যাসাইনমেন্ট ফিল্টার করা
     const assignmentQuery = {
       $or: [{ classId: currentClass }, { class: currentClass }]
     };
