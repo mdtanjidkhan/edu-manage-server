@@ -1341,12 +1341,6 @@ app.get('/api/teacher/dashboard-stats', async (req, res) => {
         "Midterm",
         "Final Exam"
       ];
-
-
-      // --------------------------------
-      // Check submitted marks
-      // --------------------------------
-
       const submittedMarks = await marksCollection
         .find({
           teacherEmail: email
@@ -1357,15 +1351,9 @@ app.get('/api/teacher/dashboard-stats', async (req, res) => {
           examType: 1
         })
         .toArray();
-
-
-      // --------------------------------
       // Create Set of submitted
       // Class + Subject + Exam
-      // --------------------------------
-
       const submittedSet = new Set();
-
       submittedMarks.forEach((mark) => {
 
         if (
@@ -1382,7 +1370,6 @@ app.get('/api/teacher/dashboard-stats', async (req, res) => {
       });
       // --------------------------------
       // Calculate Pending
-      // --------------------------------
       assignedSubjects.forEach((assignment) => {
 
         const [className, subjectName] =
@@ -1404,8 +1391,6 @@ app.get('/api/teacher/dashboard-stats', async (req, res) => {
     }
  // ================================
     // Final Response
-    // ================================
-
     res.status(200).json({
       success: true,
 
@@ -1523,8 +1508,6 @@ app.get('/api/teacher/attendance-status', async (req, res) => {
     if (!teacherEmail) {
       return res.status(400).json({ success: false, message: "Teacher email required" });
     }
-
-    // আজকের তারিখ বের করা (YYYY-MM-DD)
     const today = new Date().toISOString().split('T')[0];
 
     const attendanceRecord = await teacherAttendanceCollection.findOne({
