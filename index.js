@@ -37,6 +37,7 @@ async function run() {
     const marksCollection = db.collection("marks");
     const assignmentsCollection = db.collection("assignments");
     const submissionsCollection = db.collection("submissions");
+    const paymentsCollection = db.collection("payments");
 
 
     // 🚀 TASK 1.1: ADMIN STATS API
@@ -585,59 +586,144 @@ app.delete('/api/admin/routine/:id', async (req, res) => {
 
 
 // ==========================================
-// 1.6 GET ALL FEES / PAYMENT RECORDS
+// ADMIN FEES & PAYMENT MANAGEMENT APIs
 // ==========================================
-app.get('/api/admin/fees', async (req, res) => {
+
+// ১. POST: নতুন ফি ক্রিয়েট করা
+app.post("/api/admin/fees", async (req, res) => {
   try {
-    const { department, status, search } = req.query;
+    const { title, category, className, group, amount, dueDate } = req.body;
 
-    let query = {};
-    if (department && department !== "All") {
-      query.department = department;
-    }
-    if (status && status !== "All") {
-      query.status = status; // "Paid" or "Pending"
-    }
-    if (search) {
-      query.$or = [
-        { studentName: { $regex: search, $options: "i" } },
-        { studentId: { $regex: search, $options: "i" } }
-      ];
+    if (!title || !category || !className || !amount || !dueDate) {
+      return res.status(400).json({
+        success: false,
+        message: "সবগুলো ফিল্ড দেওয়া আবশ্যক"
+      });
     }
 
-    const records = await feesCollection
-      .find(query)
-      .sort({ createdAt: -1 })
-      .toArray();
-
-    res.status(200).json({ success: true, records });
-  } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to fetch fee records" });
-  }
-});
-
-
-// 2. UPDATE FEE STATUS (COLLECT PAYMENT)
-app.patch('/api/admin/fees/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, paymentMethod } = req.body;
-
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = {
-      $set: {
-        status: status, // "Paid"
-        paymentMethod: paymentMethod || "Cash",
-        paidAt: new Date().toISOString().split("T")[0]
-      }
+    const newFee = {
+      title,
+      category,
+      className,
+      group: (className === 'Class 9' || className === 'Class 10') ? (group || 'All') : 'General',
+      amount: Number(amount),
+      dueDate,
+      createdAt: new Date()
     };
 
-    const result = await feesCollection.updateOne(filter, updateDoc);
-    res.status(200).json({ success: true, message: "Fee payment updated successfully!", result });
+    const result = await feesCollection.insertOne(newFee);
+
+    return res.status(201).json({
+      success: true,
+      message: "ফি সফলভাবে পোস্ট করা হয়েছে",
+      insertedId: result.insertedId
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to update fee record" });
+    console.error("Create Fee API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
+
+// ২. GET: এডমিনের সেট করা সব ফি দেখা
+app.get("/api/admin/fees", async (req, res) => {
+  try {
+    const fees = await feesCollection.find().sort({ createdAt: -1 }).toArray();
+    return res.status(200).json({
+      success: true,
+      data: fees
+    });
+  } catch (error) {
+    console.error("Get Fees API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ৩. PUT: সেট করা ফি এডিট/আপডেট করা
+app.put("/api/admin/fees/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, category, className, group, amount, dueDate } = req.body;
+    const updatedFee = {
+      title,
+      category,
+      className,
+      group: (className === 'Class 9' || className === 'Class 10') ? (group || 'All') : 'General',
+      amount: Number(amount),
+      dueDate,
+      updatedAt: new Date()
+    };
+
+    const result = await feesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedFee }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "ফি পাওয়া যায়নি" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "ফি সফলভাবে আপডেট করা হয়েছে"
+    });
+  } catch (error) {
+    console.error("Update Fee API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ৪. DELETE: ফি ডিলিট করা
+app.delete("/api/admin/fees/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { ObjectId } = require("mongodb");
+
+    const result = await feesCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "ফি পাওয়া যায়নি" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "ফি ডিলিট করা হয়েছে"
+    });
+  } catch (error) {
+    console.error("Delete Fee API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ৫. GET:
+app.get("/api/admin/payments", async (req, res) => {
+  try {
+    const payments = await paymentsCollection.find().sort({ createdAt: -1 }).toArray();
+
+    const chartDataMap = {};
+    payments.forEach((payment) => {
+      if (payment.status === "Paid") {
+        const cls = payment.className || "Unknown";
+        chartDataMap[cls] = (chartDataMap[cls] || 0) + Number(payment.amount);
+      }
+    });
+
+    const pieChartData = Object.keys(chartDataMap).map((className) => ({
+      name: className,
+      value: chartDataMap[className]
+    }));
+
+    return res.status(200).json({
+      success: true,
+      payments,      
+      pieChartData   
+    });
+  } catch (error) {
+    console.error("Get Payments API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+
 
 // 1. GET SYSTEM SETTINGS & ANALYTICS
 
@@ -2028,6 +2114,85 @@ app.post("/api/student/assignments/submit", async (req, res) => {
 
   } catch (error) {
     console.error("Student Submit Assignment API Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+
+// ==========================================
+// STUDENT FEES & PAYMENT APIs
+// ==========================================
+
+// ১. GET: নির্দিষ্ট ক্লাস ও গ্রুপ অনুযায়ী ফি ফিল্টার করা
+// Endpoint: /api/student/fees?className=Class 9&group=Science
+app.get("/api/student/fees", async (req, res) => {
+  try {
+    const { className, group } = req.query;
+
+    if (!className) {
+      return res.status(400).json({ success: false, message: "Class is required" });
+    }
+
+    // কোয়েরি অবজেক্ট তৈরি
+    let query = { className };
+
+    // ক্লাস ৯ বা ১০ হলে গ্রুপের উপর ভিত্তি করে ফিল্টার (All group অথবা specific group)
+    if (className === "Class 9" || className === "Class 10") {
+      if (group) {
+        query.group = { $in: [group, "All"] };
+      }
+    }
+
+    const fees = await feesCollection.find(query).sort({ createdAt: -1 }).toArray();
+
+    return res.status(200).json({
+      success: true,
+      data: fees
+    });
+  } catch (error) {
+    console.error("Student Get Fees Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ২. POST: স্টুডেন্ট ফি পেমেন্ট সাবমিট করা
+// Endpoint: /api/student/pay
+app.post("/api/student/pay", async (req, res) => {
+  try {
+    const { studentName, className, group, roll, feeTitle, amount, trxID } = req.body;
+
+    if (!studentName || !className || !roll || !feeTitle || !amount || !trxID) {
+      return res.status(400).json({ success: false, message: "All fields are required" });
+    }
+
+    
+    const existingPayment = await paymentsCollection.findOne({ trxID });
+    if (existingPayment) {
+      return res.status(400).json({ success: false, message: "This bKash TrxID has already been used!" });
+    }
+
+    const newPayment = {
+      studentName,
+      className,
+      group: group || 'General',
+      roll,
+      feeTitle,
+      amount: Number(amount),
+      paymentMethod: 'bKash',
+      trxID,
+      status: 'Paid',
+      createdAt: new Date()
+    };
+
+    const result = await paymentsCollection.insertOne(newPayment);
+
+    return res.status(201).json({
+      success: true,
+      message: "Payment submitted successfully!",
+      insertedId: result.insertedId
+    });
+  } catch (error) {
+    console.error("Student Pay Error:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
