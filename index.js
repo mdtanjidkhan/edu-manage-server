@@ -1999,7 +1999,6 @@ app.get("/api/student/assignments", async (req, res) => {
       $or: [{ classId: currentClass }, { class: currentClass }]
     };
 
-    // Class 9/10 এর ক্ষেত্রে গ্রুপ ফিল্টার প্রযোজ্য
     if (currentClass === "Class 9" || currentClass === "Class 10") {
       assignmentQuery.group = studentGroup;
     }
