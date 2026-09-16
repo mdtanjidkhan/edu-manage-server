@@ -2119,11 +2119,9 @@ app.post("/api/student/assignments/submit", async (req, res) => {
 });
 
 
-// ==========================================
-// STUDENT FEES & PAYMENT APIs
-// ==========================================
 
-// ১. GET: নির্দিষ্ট ক্লাস ও গ্রুপ অনুযায়ী ফি ফিল্টার করা
+// STUDENT FEES & PAYMENT APIs
+
 // Endpoint: /api/student/fees?className=Class 9&group=Science
 app.get("/api/student/fees", async (req, res) => {
   try {
@@ -2132,11 +2130,8 @@ app.get("/api/student/fees", async (req, res) => {
     if (!className) {
       return res.status(400).json({ success: false, message: "Class is required" });
     }
-
-    // কোয়েরি অবজেক্ট তৈরি
     let query = { className };
 
-    // ক্লাস ৯ বা ১০ হলে গ্রুপের উপর ভিত্তি করে ফিল্টার (All group অথবা specific group)
     if (className === "Class 9" || className === "Class 10") {
       if (group) {
         query.group = { $in: [group, "All"] };
@@ -2155,7 +2150,7 @@ app.get("/api/student/fees", async (req, res) => {
   }
 });
 
-// ২. POST: স্টুডেন্ট ফি পেমেন্ট সাবমিট করা
+
 // Endpoint: /api/student/pay
 app.post("/api/student/pay", async (req, res) => {
   try {
