@@ -2347,7 +2347,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
       });
     }
 
-    // 🔥 Better Auth দিয়ে আসল password reset
+    //  Better Auth দিয়ে আসল password reset
     await auth.api.resetPassword({
       body: {
         newPassword,
