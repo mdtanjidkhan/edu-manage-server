@@ -6,9 +6,10 @@ const { MongoClient, ServerApiVersion} = require('mongodb');
 const PORT = process.env.PORT
 app.use(cors());
 app.use(express.json());
-const bcrypt = require('bcryptjs');
+const { auth } = require("./lib/auth");
 const { ObjectId } = require('mongodb');
 const uri = process.env.MONGODB_SERVER_URL;
+
 
 app.get('/', (req, res) => {
   res.send('EduManage Express Server Running!')
@@ -41,7 +42,6 @@ async function run() {
 
 
     // 🚀 TASK 1.1: ADMIN STATS API
-    // ==========================================
     app.get('/api/admin/stats', async (req, res) => {
       try {
        
@@ -100,56 +100,92 @@ app.get('/api/admin/students', async (req, res) => {
 
 
 // 🚀 TASK 1.2: ADD NEW STUDENT (POST)
-
 app.post('/api/admin/students', async (req, res) => {
   try {
-    const { name, email, password, studentId, class: className, group } = req.body;
-
-    if (!name || !email || !password || !studentId || !className) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "All required fields (name, email, password, studentId, class) must be provided." 
-      });
-    }
-    const existingUser = await usersCollection.findOne({
-      $or: [{ email }, { studentId }]
-    });
-
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: "Student with this Email or Student ID already exists."
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newStudent = {
+    const {
       name,
       email,
-      password: hashedPassword,
-      role: "student",
+      password,
       studentId,
       class: className,
-      group: group || "General", // Class 6-8 
-      emailVerified: false,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+      group,
+    } = req.body;
 
-    const result = await usersCollection.insertOne(newStudent);
+    // Validation
+    if (!name || !email || !password || !studentId || !className) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "All required fields (name, email, password, studentId, class) must be provided.",
+      });
+    }
 
-    res.status(201).json({
-      success: true,
-      message: "Student added successfully!",
-      studentId: result.insertedId
+    // Check existing student information
+    const existingStudent = await usersCollection.findOne({
+      $or: [{ email }, { studentId }],
     });
 
+    if (existingStudent) {
+      return res.status(400).json({
+        success: false,
+        message: "Student with this Email or Student ID already exists.",
+      });
+    }
+
+    // Create Better Auth account
+    const result = await auth.api.signUpEmail({
+      body: {
+        name,
+        email,
+        password,
+      },
+    });
+
+    if (!result?.user) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to create student account.",
+      });
+    }
+
+    // Update Better Auth user with student information
+    await usersCollection.updateOne(
+      { _id: new ObjectId(result.user.id) },
+      {
+        $set: {
+          role: "student",
+          studentId,
+          class: className,
+          group: group || "General",
+          emailVerified: false,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "Student account created successfully!",
+      student: {
+        id: result.user.id,
+        name,
+        email,
+        role: "student",
+        studentId,
+        class: className,
+        group: group || "General",
+      },
+    });
   } catch (error) {
     console.error("Add Student Error:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
   }
 });
+
 
 // ==========================================
 // 🚀 TASK 1.2: UPDATE STUDENT (PUT)
@@ -238,43 +274,80 @@ app.get('/api/admin/teachers', async (req, res) => {
 
 //  TASK 1.3: ADD NEW TEACHER (POST)
 // 1. POST: Create New Teacher
-
 app.post('/api/admin/teachers', async (req, res) => {
   try {
-    const { name, email, password, designation, subject } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ success: false, message: "Name, email, and password are required" });
-    }
-
-    const existingUser = await usersCollection.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ success: false, message: "Email already registered" });
-    }
-
-    const newTeacher = {
+    const {
       name,
       email,
-      password, // Note: Hash with bcrypt in production
-      role: "teacher",
-      designation: designation || "Assistant Teacher",
-      subject: subject || "Mathematics",
-      emailVerified: false,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+      password,
+      designation,
+      subject
+    } = req.body;
 
-    const result = await usersCollection.insertOne(newTeacher);
-    res.status(201).json({ success: true, message: "Teacher created successfully", insertedId: result.insertedId });
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, email, and password are required"
+      });
+    }
+
+    // Check existing user
+    const existingUser = await usersCollection.findOne({ email });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: "Email already registered"
+      });
+    }
+
+    // Create Better Auth user
+    const authResult = await auth.api.signUpEmail({
+      body: {
+        name,
+        email,
+        password
+      }
+    });
+
+    if (!authResult?.user) {
+      return res.status(400).json({
+        success: false,
+        message: "Failed to create teacher account"
+      });
+    }
+
+    // Add teacher-specific information
+    await usersCollection.updateOne(
+      { _id: new ObjectId(authResult.user.id) },
+      {
+        $set: {
+          role: "teacher",
+          designation: designation || "Assistant Teacher",
+          subject: subject || "Mathematics",
+          emailVerified: false,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Teacher created successfully",
+      teacherId: authResult.user.id
+    });
+
   } catch (error) {
     console.error("Error creating teacher:", error);
-    res.status(500).json({ success: false, message: "Failed to create teacher" });
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to create teacher"
+    });
   }
 });
 
-// ==========================================
 // 2. PUT: Update Teacher Details
-// ==========================================
 app.put('/api/admin/teachers/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -2174,8 +2247,143 @@ app.post("/api/student/pay", async (req, res) => {
   }
 });
 
+app.get('/api/notice', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit);
+    const notices = await noticeCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.status(200).json(notices);
+  } catch (error) {
+    console.error("Notice fetch error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "নোটিশ লোড করতে সমস্যা হয়েছে", 
+      error: error.message 
+    });
+  }
+});
 
 
+// 🚀 1. FORGOT PASSWORD API
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    const user = await usersCollection.findOne({ email });
+
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If the email exists, an OTP has been sent.",
+      });
+    }
+
+    // Better Auth reset token generate করবে
+    await auth.api.requestPasswordReset({
+      body: {
+        email,
+        redirectTo: `${process.env.BETTER_AUTH_URL}/reset-password`,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "An OTP has been sent to your email.",
+    });
+
+  } catch (error) {
+    console.error("Forgot Password Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to send OTP email.",
+    });
+  }
+});
+
+
+// 🚀 2. RESET PASSWORD API
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "All fields are required",
+      });
+    }
+
+    // OTP + expiry check
+    const user = await usersCollection.findOne({
+      email,
+      resetOtp: otp,
+      resetOtpExpires: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP!",
+      });
+    }
+
+    // Better Auth reset token
+    if (!user.resetPasswordToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Password reset token not found or expired.",
+      });
+    }
+
+    // 🔥 Better Auth দিয়ে আসল password reset
+    await auth.api.resetPassword({
+      body: {
+        newPassword,
+        token: user.resetPasswordToken,
+      },
+    });
+
+    // OTP + token remove
+    await usersCollection.updateOne(
+      { _id: user._id },
+      {
+        $unset: {
+          resetOtp: "",
+          resetOtpExpires: "",
+          resetPasswordToken: "",
+        },
+        $set: {
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset successful!",
+    });
+
+  } catch (error) {
+    console.error("Reset Password Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to reset password.",
+    });
+  }
+});
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });

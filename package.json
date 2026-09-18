@@ -11,10 +11,14 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@better-auth/mongo-adapter": "^1.7.5",
     "bcryptjs": "^3.0.3",
+    "better-auth": "^1.7.5",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "mongodb": "^7.5.0"
+    "mongodb": "^7.5.0",
+    "nodemailer": "^10.0.10",
+    "resend": "^6.28.1"
   }
 }
