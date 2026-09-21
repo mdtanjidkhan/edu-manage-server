@@ -3,6 +3,7 @@ const app = express()
 const cors = require('cors')
 require('dotenv').config()
 const { MongoClient, ServerApiVersion} = require('mongodb');
+const { jwtVerify, createRemoteJWKSet } = require('jose-cjs');
 const PORT = process.env.PORT
 app.use(cors());
 app.use(express.json());
@@ -22,6 +23,41 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
+
+
+
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.BETTER_AUTH_URL}/api/auth/jwks`)
+);
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req?.headers?.authorization;
+  console.log("Authorization Header:", authHeader); // Debugging line
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).send({ message: 'Unauthorized access: Missing token header' });
+  }
+
+  const token = authHeader.split(" ")[1];
+  console.log("Extracted Token:", token); // Debugging line
+
+  if (!token) {
+    return res.status(401).send({ message: 'Unauthorized access: Token not found' });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    req.user = payload; 
+    console.log("Verified User Payload:", payload); // 
+    
+    next(); 
+  } catch (error) {
+    console.error("Token Verification Error:", error.message);
+    return res.status(403).send({ message: 'Forbidden access: Invalid or expired token' });
+  }
+};
+
+
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -100,7 +136,7 @@ app.get('/api/admin/students', async (req, res) => {
 
 
 // 🚀 TASK 1.2: ADD NEW STUDENT (POST)
-app.post('/api/admin/students', async (req, res) => {
+app.post('/api/admin/students', verifyToken, async (req, res) => {
   try {
     const {
       name,
@@ -190,7 +226,7 @@ app.post('/api/admin/students', async (req, res) => {
 // ==========================================
 // 🚀 TASK 1.2: UPDATE STUDENT (PUT)
 // ==========================================
-app.put('/api/admin/students/:id', async (req, res) => {
+app.put('/api/admin/students/:id',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, studentId, class: className, group } = req.body;
@@ -230,7 +266,7 @@ app.put('/api/admin/students/:id', async (req, res) => {
 // ==========================================
 // 🚀 TASK 1.2: DELETE STUDENT (DELETE)
 // ==========================================
-app.delete('/api/admin/students/:id', async (req, res) => {
+app.delete('/api/admin/students/:id',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -274,7 +310,7 @@ app.get('/api/admin/teachers', async (req, res) => {
 
 //  TASK 1.3: ADD NEW TEACHER (POST)
 // 1. POST: Create New Teacher
-app.post('/api/admin/teachers', async (req, res) => {
+app.post('/api/admin/teachers',verifyToken, async (req, res) => {
   try {
     const {
       name,
@@ -348,7 +384,7 @@ app.post('/api/admin/teachers', async (req, res) => {
 });
 
 // 2. PUT: Update Teacher Details
-app.put('/api/admin/teachers/:id', async (req, res) => {
+app.put('/api/admin/teachers/:id',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, designation, subject } = req.body;
@@ -379,7 +415,7 @@ app.put('/api/admin/teachers/:id', async (req, res) => {
 // ==========================================
 // 🚀 TASK 1.3: DELETE TEACHER (DELETE)
 // ==========================================
-app.delete('/api/admin/teachers/:id', async (req, res) => {
+app.delete('/api/admin/teachers/:id',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -420,7 +456,7 @@ app.get('/api/admin/users', async (req, res) => {
 // ==========================================
 // 🚀 TASK 1.4: UPDATE USER ROLE & STATUS (PATCH)
 // ==========================================
-app.patch('/api/admin/users/:id/access', async (req, res) => {
+app.patch('/api/admin/users/:id/access',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { role, status } = req.body;
@@ -452,21 +488,18 @@ app.patch('/api/admin/users/:id/access', async (req, res) => {
   }
 });
 
-// ==========================================
-// 1.5 STUDENT ATTENDANCE REPORT API (GET)
+
 // 1. STUDENT ATTENDANCE REPORT API (GET)
-// ==========================================
-app.get('/api/admin/attendance/students', async (req, res) => {
+app.get('/api/admin/attendance/students',  async (req, res) => {
   try {
     const { date, subject } = req.query;
 
     let query = {};
     if (date) {
-      query.date = date; // Format: YYYY-MM-DD
+      query.date = date; 
     }
-    // department এর পরিবর্তে subject দিয়ে ফিল্টার
     if (subject && subject !== "All") {
-      query.subjectName = subject; // অথবা আপনার স্কিমা অনুযায়ী query.subject
+      query.subjectName = subject; 
     }
 
     const records = await attendanceCollection
@@ -517,7 +550,7 @@ app.get('/api/admin/attendance/teachers', async (req, res) => {
 
 // POST: Create Routine with Overlap Check (Task 2.4)
 
-app.post('/api/admin/routine', async (req, res) => {
+app.post('/api/admin/routine',verifyToken, async (req, res) => {
   try {
     const { teacherId, teacherName, day, subjectName, classId, group, startTime, endTime, roomNo } = req.body;
 
@@ -605,7 +638,7 @@ app.get('/api/admin/routine', async (req, res) => {
 
 
 // 3. PUT: Update Routine Entry
-app.put('/api/admin/routine/:id', async (req, res) => {
+app.put('/api/admin/routine/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { teacherId, teacherName, day, subjectName, classId, group, startTime, endTime, roomNo } = req.body;
@@ -641,7 +674,7 @@ app.put('/api/admin/routine/:id', async (req, res) => {
 
 
 // 4. DELETE: Remove Routine Entry
-app.delete('/api/admin/routine/:id', async (req, res) => {
+app.delete('/api/admin/routine/:id',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await routineCollection.deleteOne({ _id: new ObjectId(id) });
@@ -663,7 +696,7 @@ app.delete('/api/admin/routine/:id', async (req, res) => {
 // ==========================================
 
 // ১. POST: নতুন ফি ক্রিয়েট করা
-app.post("/api/admin/fees", async (req, res) => {
+app.post("/api/admin/fees",verifyToken, async (req, res) => {
   try {
     const { title, category, className, group, amount, dueDate } = req.body;
 
@@ -712,7 +745,7 @@ app.get("/api/admin/fees", async (req, res) => {
 });
 
 // ৩. PUT: সেট করা ফি এডিট/আপডেট করা
-app.put("/api/admin/fees/:id", async (req, res) => {
+app.put("/api/admin/fees/:id",verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { title, category, className, group, amount, dueDate } = req.body;
@@ -746,7 +779,7 @@ app.put("/api/admin/fees/:id", async (req, res) => {
 });
 
 // ৪. DELETE: ফি ডিলিট করা
-app.delete("/api/admin/fees/:id", async (req, res) => {
+app.delete("/api/admin/fees/:id",verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { ObjectId } = require("mongodb");
@@ -813,7 +846,7 @@ app.get('/api/admin/settings', async (req, res) => {
     res.status(200).json({
       success: true,
       settings: settings || {
-        instituteName: "Polytechnic Institute of Technology",
+        instituteName: "Mesra High School",
         academicYear: "2026-2027",
         allowSelfSignup: true,
         maintenanceMode: false,
@@ -828,7 +861,7 @@ app.get('/api/admin/settings', async (req, res) => {
 
 // 2. UPDATE SYSTEM SETTINGS (PUT)
 
-app.put('/api/admin/settings', async (req, res) => {
+app.put('/api/admin/settings',verifyToken, async (req, res) => {
   try {
     const { instituteName, academicYear, allowSelfSignup, maintenanceMode } = req.body;
 
@@ -871,7 +904,7 @@ app.get('/api/notices', async (req, res) => {
   }
 });
 // POST: নতুন নোটিশ তৈরি করা (Admin Only)
-app.post('/api/admin/notices', async (req, res) => {
+app.post('/api/admin/notices',verifyToken, async (req, res) => {
   try {
     const { title, description, targetAudience, category } = req.body;
 
@@ -896,7 +929,7 @@ app.post('/api/admin/notices', async (req, res) => {
 });
 
 // PATCH / PUT: নোটিশ আপডেট করা (Admin Only)
-app.patch('/api/admin/notices/:id', async (req, res) => {
+app.patch('/api/admin/notices/:id',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
@@ -913,7 +946,7 @@ app.patch('/api/admin/notices/:id', async (req, res) => {
 });
 
 
-app.delete('/api/admin/notices/:id', async (req, res) => {
+app.delete('/api/admin/notices/:id',verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await noticeCollection.deleteOne({ _id: new ObjectId(id) });
@@ -930,19 +963,16 @@ app.delete('/api/admin/notices/:id', async (req, res) => {
 
 // 2. POST: Save/Upsert Student Attendance Record
 // POST: Save or Update Attendance
-app.post("/api/teacher/attendance", async (req, res) => {
+app.post("/api/teacher/attendance",verifyToken, async (req, res) => {
   try {
     const { date, classId, group, subject, records, teacherEmail } = req.body;
 
-    // ১. প্রয়োজনীয় Field ফিল্টারিং ও ভ্যালিডেশন
     if (!date || !classId || !subject || !records || !teacherEmail) {
       return res.status(400).json({ 
         success: false, 
         message: "Missing required fields (date, classId, subject, records, or teacherEmail)" 
       });
     }
-
-    // ২. Database থেকে logged-in teacher-এর তথ্য খুঁজে বের করা
     const teacher = await usersCollection.findOne({ email: teacherEmail });
 
     if (!teacher) {
@@ -952,7 +982,6 @@ app.post("/api/teacher/attendance", async (req, res) => {
       });
     }
 
-    // ৩. Filter এবং Upsert Payload প্রস্তুত করা
     const filter = { date, classId, group, subject,teacherEmail };
     
     const updateDoc = {
@@ -1063,10 +1092,9 @@ app.get("/api/teacher/routine/:teacherEmail", async (req, res) => {
 
 // task 2.4 marks 
 
-// ==========================================
 // 1. POST: Create or Update (Upsert) Marks
-// ==========================================
-app.post('/api/teacher/marks', async (req, res) => {
+
+app.post('/api/teacher/marks',verifyToken, async (req, res) => {
   try {
     const { classId, examType, subjectName, marks, teacherEmail } = req.body;
     if (!classId || !examType || !subjectName || !marks || !Array.isArray(marks) || marks.length === 0) {
@@ -1139,7 +1167,7 @@ app.get('/api/teacher/marks', async (req, res) => {
 
 // 3. DELETE: Clear Marks for Specific Exam & Subject
 
-app.delete('/api/teacher/marks', async (req, res) => {
+app.delete('/api/teacher/marks',verifyToken, async (req, res) => {
   try {
     const { classId, examType, subjectName } = req.query;
 
@@ -1159,7 +1187,7 @@ app.delete('/api/teacher/marks', async (req, res) => {
 
 // TEACHER ASSIGNMENT MANAGEMENT APIs
 // ১. POST: Teacher Assignment Publish API
-app.post("/api/teacher/assignments", async (req, res) => {
+app.post("/api/teacher/assignments",verifyToken, async (req, res) => {
   try {
     const { 
       title, 
@@ -1250,7 +1278,7 @@ app.get("/api/teacher/assignments", async (req, res) => {
 
 
 // PUT: Teacher Update Assignment API
-app.put("/api/teacher/assignments/:id", async (req, res) => {
+app.put("/api/teacher/assignments/:id",verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { title, subject, classId, group, description, deadline } = req.body;
@@ -1294,7 +1322,7 @@ app.put("/api/teacher/assignments/:id", async (req, res) => {
 });
 
 // ৩. DELETE: Teacher Assignment Delete API
-app.delete("/api/teacher/assignments/:id", async (req, res) => {
+app.delete("/api/teacher/assignments/:id",verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
   
@@ -1608,7 +1636,7 @@ app.get('/api/teacher/attendance-status', async (req, res) => {
 });
 
 // ২. API
-app.post('/api/teacher/check-in', async (req, res) => {
+app.post('/api/teacher/check-in',verifyToken, async (req, res) => {
   try {
     const { teacherEmail, teacherName } = req.body;
 
@@ -2116,7 +2144,7 @@ app.get("/api/student/assignments", async (req, res) => {
 });
 
 // ২. POST: Submit Assignment Solution
-app.post("/api/student/assignments/submit", async (req, res) => {
+app.post("/api/student/assignments/submit",verifyToken, async (req, res) => {
   try {
     const { assignmentId, studentEmail, submissionText, fileUrl } = req.body;
 
@@ -2207,7 +2235,7 @@ app.get("/api/student/fees", async (req, res) => {
 
 
 // Endpoint: /api/student/pay
-app.post("/api/student/pay", async (req, res) => {
+app.post("/api/student/pay",verifyToken, async (req, res) => {
   try {
     const { studentName, className, group, roll, feeTitle, amount, trxID } = req.body;
 
