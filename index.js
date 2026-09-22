@@ -2413,6 +2413,91 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
+// Express route for updating student profile
+app.put("/api/profile/update-student",verifyToken, async (req, res) => {
+  try {
+    const userEmail = req.user?.email;
+
+    if (!userEmail) {
+      return res.status(401).json({ error: "Unauthorized access" });
+    }
+
+    const usersCollection = db.collection("user");
+    const currentUser = await usersCollection.findOne({ email: userEmail });
+
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (currentUser.role !== "student") {
+      return res.status(403).json({ error: "Only students can update this info" });
+    }
+    if (currentUser.class || currentUser.phone) {
+      return res.status(400).json({ 
+        error: "Your academic info is locked. Contact Admin to make changes." 
+      });
+    }
+
+    const { studentClass, studentGroup, studentPhone } = req.body;
+
+    if (!studentClass || !studentPhone) {
+      return res.status(400).json({ error: "Class and Phone are required." });
+    }
+
+    let finalGroup = studentGroup;
+    if (["Class 6", "Class 7", "Class 8"].includes(studentClass)) {
+      finalGroup = "General";
+    }
+
+    const result = await usersCollection.updateOne(
+      { email: userEmail },
+      {
+        $set: {
+          class: studentClass,
+          group: finalGroup,
+          phone: studentPhone,
+          updatedAt: new Date()
+        },
+      }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(400).json({ error: "Failed to update profile." });
+    }
+
+    const updatedUser = await usersCollection.findOne({ email: userEmail });
+
+    return res.status(200).json({
+      success: true,
+      message: "Academic info saved and locked successfully!",
+      user: updatedUser,
+    });
+
+  } catch (error) {
+    console.error("Update Error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Express Backend: কারেন্ট ইউজারের আপডেটেড প্রোফাইল পাওয়ার জন্য
+app.get("/api/profile/me",verifyToken, async (req, res) => {
+  try {
+    const userEmail = req.user?.email; // Auth Middleware থেকে প্রাপ্ত ইমেইল
+
+    if (!userEmail) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const usersCollection = db.collection("user");
+    const dbUser = await usersCollection.findOne({ email: userEmail });
+
+    return res.status(200).json({ success: true, user: dbUser });
+  } catch (error) {
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
