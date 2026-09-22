@@ -778,7 +778,7 @@ app.put("/api/admin/fees/:id",verifyToken, async (req, res) => {
   }
 });
 
-// ৪. DELETE: ফি ডিলিট করা
+// ৪. DELETE:
 app.delete("/api/admin/fees/:id",verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -826,6 +826,27 @@ app.get("/api/admin/payments", async (req, res) => {
   } catch (error) {
     console.error("Get Payments API Error:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// Example: Express.js Backend Route
+app.patch('/api/admin/payments/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; 
+
+    const result = await paymentsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: status, paidAt: new Date() } } 
+    );
+
+    if (result.modifiedCount > 0) {
+      res.send({ success: true, message: "Status updated successfully" });
+    } else {
+      res.status(400).send({ success: false, message: "No changes made" });
+    }
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
   }
 });
 
@@ -2204,27 +2225,41 @@ app.post("/api/student/assignments/submit",verifyToken, async (req, res) => {
 
 
 // STUDENT FEES & PAYMENT APIs
-
-// Endpoint: /api/student/fees?className=Class 9&group=Science
-app.get("/api/student/fees", async (req, res) => {
+// ১. Secure Endpoint: GET /api/student/fees
+app.get("/api/student/fees", verifyToken, async (req, res) => {
   try {
-    const { className, group } = req.query;
+    const userEmail = req.user?.email; 
+    const student = await usersCollection.findOne({ email: userEmail });
 
-    if (!className) {
-      return res.status(400).json({ success: false, message: "Class is required" });
+    if (!student || !student.class) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Student academic profile not updated yet." 
+      });
     }
-    let query = { className };
 
-    if (className === "Class 9" || className === "Class 10") {
-      if (group) {
-        query.group = { $in: [group, "All"] };
+    const { class: studentClass, group: studentGroup } = student;
+    let query = { className: studentClass };
+
+    if (studentClass === "Class 9" || studentClass === "Class 10") {
+      if (studentGroup) {
+        query.group = { $in: [studentGroup, "All"] };
       }
+    } else {
+      query.group = { $in: ["General", "All", "N/A"] };
     }
 
     const fees = await feesCollection.find(query).sort({ createdAt: -1 }).toArray();
 
     return res.status(200).json({
       success: true,
+      studentInfo: {
+        name: student.name,
+        class: studentClass,
+        group: studentGroup || "General",
+        studentId: student.studentId || "N/A",
+        roll: student.roll || "N/A"
+      },
       data: fees
     });
   } catch (error) {
@@ -2234,31 +2269,67 @@ app.get("/api/student/fees", async (req, res) => {
 });
 
 
-// Endpoint: /api/student/pay
-app.post("/api/student/pay",verifyToken, async (req, res) => {
+// ২. Secure Endpoint: POST /api/student/pay
+app.post("/api/student/pay", verifyToken, async (req, res) => {
   try {
-    const { studentName, className, group, roll, feeTitle, amount, trxID } = req.body;
+    const userEmail = req.user?.email;
+    const { feeId, feeTitle, amount, trxID } = req.body;
 
-    if (!studentName || !className || !roll || !feeTitle || !amount || !trxID) {
+    // ১. Basic Validation
+    if (!feeTitle || !amount || !trxID || !feeId) {
       return res.status(400).json({ success: false, message: "All fields are required" });
     }
 
-    
-    const existingPayment = await paymentsCollection.findOne({ trxID });
-    if (existingPayment) {
+    // ২. TrxID Length Validation (Exactly 10 characters)
+    const cleanedTrxID = trxID.trim().toUpperCase();
+    if (cleanedTrxID.length !== 10) {
+      return res.status(400).json({ success: false, message: "bKash TrxID must be exactly 10 characters." });
+    }
+
+    // ৩. Fetch student details from database
+    const student = await usersCollection.findOne({ email: userEmail });
+
+    if (!student || !student.class) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Complete your academic profile setup first!" 
+      });
+    }
+
+    // ৪. Duplicate TrxID Check
+    const existingTrx = await paymentsCollection.findOne({ trxID: cleanedTrxID });
+    if (existingTrx) {
       return res.status(400).json({ success: false, message: "This bKash TrxID has already been used!" });
     }
 
+    // ৫. Duplicate Fee Payment Check 
+    const existingFeePayment = await paymentsCollection.findOne({ 
+      studentEmail: student.email, 
+      feeId: feeId 
+    });
+
+    if (existingFeePayment) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `You have already submitted a payment for this fee. Status: ${existingFeePayment.status}` 
+      });
+    }
+    const isHighSchool = student.class === "Class 9" || student.class === "Class 10";
+    const finalGroup = isHighSchool ? (student.group || "General") : "General";
+
+    // ৭. Save the payment
     const newPayment = {
-      studentName,
-      className,
-      group: group || 'General',
-      roll,
+      studentEmail: student.email,
+      studentName: student.name,
+      className: student.class,
+      group: finalGroup,
+      studentId: student.studentId || "N/A", // Changed from roll to studentId
+      feeId, // Storing feeId is important for mapping
       feeTitle,
       amount: Number(amount),
       paymentMethod: 'bKash',
-      trxID,
-      status: 'Paid',
+      trxID: cleanedTrxID,
+      status: 'pending', // lowercase 'pending' is better for frontend matching
       createdAt: new Date()
     };
 
