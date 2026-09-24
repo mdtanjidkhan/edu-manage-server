@@ -12,6 +12,9 @@ const { ObjectId } = require('mongodb');
 const uri = process.env.MONGODB_SERVER_URL;
 
 
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+app.get('/favicon.png', (req, res) => res.status(204).end());
+
 app.get('/', (req, res) => {
   res.send('EduManage Express Server Running!')
 })
