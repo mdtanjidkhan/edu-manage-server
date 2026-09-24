@@ -7,7 +7,6 @@ const { jwtVerify, createRemoteJWKSet } = require('jose-cjs');
 const PORT = process.env.PORT
 app.use(cors());
 app.use(express.json());
-// const { auth } = require("./lib/auth");
 const { getAuth } = require("./lib/auth");
 const { ObjectId } = require('mongodb');
 const uri = process.env.MONGODB_SERVER_URL;
@@ -60,12 +59,10 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-
-
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    // await client.connect();
+    await client.connect();
     
     const db = client.db("edumanage"); 
     const usersCollection = db.collection("user"); 
@@ -79,6 +76,14 @@ async function run() {
     const assignmentsCollection = db.collection("assignments");
     const submissionsCollection = db.collection("submissions");
     const paymentsCollection = db.collection("payments");
+    const admissionCollection = db.collection("admission");
+
+async function generateApplicationId() {
+  const currentYear = new Date().getFullYear();
+  const count = await admissionCollection.countDocuments();
+  const sequenceNumber = String(count + 1).padStart(5, '0');
+  return `ADM-${currentYear}-${sequenceNumber}`;
+}
 
 
     // 🚀 TASK 1.1: ADMIN STATS API
@@ -2574,9 +2579,271 @@ app.get("/api/profile/me",verifyToken, async (req, res) => {
   }
 });
 
+// 1. Submit Application Route
+app.post('/api/admission/apply', async (req, res) => {
+  try {
+    const {
+      applicantName, dateOfBirth, gender, email, phone, profilePhoto,
+      previousSchool, applyingClass, group, previousClass, previousResult,
+      fatherName, motherName, guardianPhone, guardianEmail, address
+    } = req.body;
+
+    if (!applicantName || !email || !phone || !applyingClass || !fatherName || !guardianPhone) {
+      return res.status(400).json({ success: false, message: 'Please fill in all required fields.' });
+    }
+
+    const existingApp = await admissionCollection.findOne({
+      $or: [{ email: email }, { phone: phone }]
+    });
+
+    if (existingApp) {
+      return res.status(400).json({
+        success: false,
+        message: 'An application with this email or phone number already exists.'
+      });
+    }
+    // -----------------------------------------------------------------------------
+
+    // Group Logic Fix
+    let selectedGroup = 'General';
+    if (['Class 9', 'Class 10'].includes(applyingClass)) {
+      if (!group || group === 'General') {
+        return res.status(400).json({ success: false, message: 'Please select Science, Arts, or Commerce for Class 9/10.' });
+      }
+      selectedGroup = group;
+    }
+
+    const applicationId = await generateApplicationId();
+
+    const newDoc = {
+      applicationId,
+      applicantName,
+      dateOfBirth,
+      gender,
+      email,
+      phone,
+      profilePhoto: profilePhoto || '',
+      previousSchool,
+      applyingClass,
+      group: selectedGroup,
+      previousClass,
+      previousResult,
+      fatherName,
+      motherName,
+      guardianPhone,
+      guardianEmail: guardianEmail || '',
+      address,
+      status: 'Pending',
+      submittedAt: new Date(),
+      reviewedAt: null,
+      reviewedBy: null,
+      rejectionReason: ''
+    };
+
+    const result = await admissionCollection.insertOne(newDoc);
+
+    res.status(201).json({
+      success: true,
+      message: 'Application Submitted Successfully',
+      data: {
+        _id: result.insertedId,
+        applicationId,
+        applicantName,
+        applyingClass,
+        group: selectedGroup,
+        status: 'Pending'
+      }
+    });
+
+  } catch (error) {
+    console.error('Admission Submit Error:', error);
+    res.status(500).json({ success: false, message: 'Server error while submitting application.', error: error.message });
+  }
+});
+
+
+app.get('/api/admission/my-status', async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email query parameter is required.' });
+    }
+
+    const application = await admissionCollection.findOne({ email });
+
+    if (!application) {
+      return res.json({ success: true, data: null }); // কোনো আবেদন পাওয়া না গেলে null
+    }
+
+    res.json({
+      success: true,
+      data: {
+        applicationId: application.applicationId,
+        applicantName: application.applicantName,
+        applyingClass: application.applyingClass,
+        group: application.group,
+        status: application.status,
+        adminRemarks: application.rejectionReason || ''
+      }
+    });
+
+  } catch (error) {
+    console.error('Status Check Error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch application status.' });
+  }
+});
+
+//  * 2. Admin Route: Dynamic Stats
+//  * GET /api/admin/stats
+ 
+app.get('/api/admin/stats/count', async (req, res) => {
+  try {
+    const total = await admissionCollection.countDocuments();
+    const pending = await admissionCollection.countDocuments({ status: 'Pending' });
+    const approved = await admissionCollection.countDocuments({ status: 'Approved' });
+    const rejected = await admissionCollection.countDocuments({ status: 'Rejected' });
+
+    res.json({
+      success: true,
+      stats: { total, pending, approved, rejected }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to fetch statistics.' });
+  }
+});
+
+/**
+ * 3. Admin Route: Search, Filter & Pagination
+ * GET /api/admin/applications
+ */
+app.get('/api/admin/applications', async (req, res) => {
+  try {
+    const { search, applyingClass, group, status, page = 1, limit = 10 } = req.query;
+
+    let query = {};
+
+    if (search) {
+      query.$or = [
+        { applicantName: { $regex: search,$options: 'i' } },
+        { applicationId: { $regex: search,$options: 'i' } },
+        { email: { $regex: search,$options: 'i' } }
+      ];
+    }
+
+    if (applyingClass) query.applyingClass = applyingClass;
+    if (group) query.group = group;
+    if (status) query.status = status;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const applications = await admissionCollection
+      .find(query)
+      .sort({ submittedAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .toArray();
+
+    const totalApplications = await admissionCollection.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: applications,
+      pagination: {
+        total: totalApplications,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(totalApplications / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to fetch applications.' });
+  }
+});
+
+/**
+ * 4. Admin Route: Approve Application
+ * PATCH /api/admin/approve/:id
+ */
+app.patch('/api/admin/approve/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adminIdentifier = req.user?.email || 'Admin';
+
+    const result = await admissionCollection.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: 'Approved',
+          reviewedAt: new Date(),
+          reviewedBy: adminIdentifier,
+          rejectionReason: ''
+        }
+      },
+      { returnDocument: 'after' }
+    );
+
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Application not found.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Application approved successfully.',
+      data: result
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to approve application.' });
+  }
+});
+
+/**
+ * 5. Admin Route: Reject Application
+ * PATCH /api/admin/reject/:id
+ */
+app.patch('/api/admin/reject/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rejectionReason } = req.body;
+    const adminIdentifier = req.user?.email || 'Admin';
+
+    if (!rejectionReason) {
+      return res.status(400).json({ success: false, message: 'Rejection reason is required.' });
+    }
+
+    const result = await admissionCollection.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: 'Rejected',
+          rejectionReason,
+          reviewedAt: new Date(),
+          reviewedBy: adminIdentifier
+        }
+      },
+      { returnDocument: 'after' }
+    );
+
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Application not found.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Application rejected.',
+      data: result
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to reject application.' });
+  }
+});
+
 
     // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
+    await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
