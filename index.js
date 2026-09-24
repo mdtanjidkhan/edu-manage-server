@@ -7,7 +7,8 @@ const { jwtVerify, createRemoteJWKSet } = require('jose-cjs');
 const PORT = process.env.PORT
 app.use(cors());
 app.use(express.json());
-const { auth } = require("./lib/auth");
+// const { auth } = require("./lib/auth");
+const { getAuth } = require("./lib/auth");
 const { ObjectId } = require('mongodb');
 const uri = process.env.MONGODB_SERVER_URL;
 
@@ -2392,6 +2393,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     }
 
     // Better Auth reset token generate করবে
+    const auth = await getAuth();
     await auth.api.requestPasswordReset({
       body: {
         email,
@@ -2450,6 +2452,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
     }
 
     //  Better Auth দিয়ে আসল password reset
+    const auth = await getAuth();
     await auth.api.resetPassword({
       body: {
         newPassword,
