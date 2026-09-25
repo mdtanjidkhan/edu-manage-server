@@ -62,7 +62,7 @@ const verifyToken = async (req, res, next) => {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
     
     const db = client.db("edumanage"); 
     const usersCollection = db.collection("user"); 
@@ -2591,6 +2591,22 @@ app.post('/api/admission/apply', async (req, res) => {
     if (!applicantName || !email || !phone || !applyingClass || !fatherName || !guardianPhone) {
       return res.status(400).json({ success: false, message: 'Please fill in all required fields.' });
     }
+    const currentUser = await usersCollection.findOne({ email: email });
+
+    if (!currentUser) {
+      return res.status(404).json({ success: false, message: 'User account not found. Please register first.' });
+    }
+
+    // ১. Admin ও Teacher চেক
+    if (currentUser.role === 'admin' || currentUser.role === 'teacher') {
+      return res.status(403).json({ success: false, message: 'Admins and Teachers are not allowed to apply.' });
+    }
+    if (currentUser.studentId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `You are already an active student with Student ID: ${currentUser.studentId}. Application not allowed.` 
+      });
+    }
 
     const existingApp = await admissionCollection.findOne({
       $or: [{ email: email }, { phone: phone }]
@@ -2602,7 +2618,6 @@ app.post('/api/admission/apply', async (req, res) => {
         message: 'An application with this email or phone number already exists.'
       });
     }
-    // -----------------------------------------------------------------------------
 
     // Group Logic Fix
     let selectedGroup = 'General';
@@ -2673,7 +2688,7 @@ app.get('/api/admission/my-status', async (req, res) => {
     const application = await admissionCollection.findOne({ email });
 
     if (!application) {
-      return res.json({ success: true, data: null }); // কোনো আবেদন পাওয়া না গেলে null
+      return res.json({ success: true, data: null }); 
     }
 
     res.json({
@@ -2843,7 +2858,7 @@ app.patch('/api/admin/reject/:id', async (req, res) => {
 
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
