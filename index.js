@@ -77,12 +77,33 @@ async function run() {
     const submissionsCollection = db.collection("submissions");
     const paymentsCollection = db.collection("payments");
     const admissionCollection = db.collection("admission");
+    const notificationsCollection = db.collection("notifications");
 
 async function generateApplicationId() {
   const currentYear = new Date().getFullYear();
   const count = await admissionCollection.countDocuments();
   const sequenceNumber = String(count + 1).padStart(5, '0');
   return `ADM-${currentYear}-${sequenceNumber}`;
+}
+
+// Helper Function: নোটিফিকেশন ক্রিয়েট করার জন্য
+async function createNotification({ recipientRole, recipientEmail, targetClass, targetGroup, title, message, type, link }) {
+  try {
+    await notificationsCollection.insertOne({
+      recipientRole,   // 'student', 'teacher', 'admin', 'all'
+      recipientEmail: recipientEmail || null, 
+      targetClass: targetClass || null,  
+      targetGroup: targetGroup || null,    
+      title,
+      message,
+      type,            
+      link,       
+      isRead: false,
+      createdAt: new Date()
+    });
+  } catch (err) {
+    console.error("Notification creation error:", err);
+  }
 }
 
 
@@ -614,6 +635,28 @@ app.post('/api/admin/routine',verifyToken, async (req, res) => {
     };
 
     const result = await routineCollection.insertOne(newRoutine);
+     if (teacherId) {
+  await createNotification({
+    recipientRole: "teacher",
+    recipientEmail: teacherId,
+    title: "Routine Updated",
+    message: `A new ${subjectName} class has been added to your routine for ${classId}.`,
+    type: "routine",
+    link: "/dashboard/teacher/routine"
+  });
+}
+
+// 🔔 Student notification
+await createNotification({
+  recipientRole: "student",
+  targetClass: classId,
+  title: "New Class Routine",
+  message: `A new routine has been added for ${classId}.`,
+  type: "routine",
+  link: "/dashboard/student/routine"
+});
+
+    
     res.status(201).json({ success: true, message: "Routine created successfully", insertedId: result.insertedId });
 
   } catch (error) {
@@ -705,6 +748,7 @@ app.delete('/api/admin/routine/:id',verifyToken, async (req, res) => {
 // ==========================================
 
 // ১. POST: নতুন ফি ক্রিয়েট করা
+
 app.post("/api/admin/fees",verifyToken, async (req, res) => {
   try {
     const { title, category, className, group, amount, dueDate } = req.body;
@@ -727,6 +771,15 @@ app.post("/api/admin/fees",verifyToken, async (req, res) => {
     };
 
     const result = await feesCollection.insertOne(newFee);
+
+   await createNotification({
+    recipientRole: "student",
+    targetClass: className, // যেমন: Class 6
+    title: "New Fee Notice",
+    message: `${req.body.title || 'Tuition Fee'} payment is now open. Amount: ৳${req.body.amount}`,
+    type: "fee",
+    link: "/dashboard/student/fees"
+  });
 
     return res.status(201).json({
       success: true,
@@ -791,8 +844,6 @@ app.put("/api/admin/fees/:id",verifyToken, async (req, res) => {
 app.delete("/api/admin/fees/:id",verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { ObjectId } = require("mongodb");
-
     const result = await feesCollection.deleteOne({ _id: new ObjectId(id) });
 
     if (result.deletedCount === 0) {
@@ -952,6 +1003,14 @@ app.post('/api/admin/notices',verifyToken, async (req, res) => {
     };
 
     const result = await noticeCollection.insertOne(newNotice);
+    await createNotification({
+    recipientRole: req.body.targetRole || "student", // student/all
+    targetClass: req.body.class || null,
+    title: "New Notice Published",
+    message: req.body.title,
+    type: "notice",
+    link: "/dashboard/student/notices"
+  });
     res.status(201).json({ success: true, message: "Notice created successfully", result });
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to create notice" });
@@ -1029,6 +1088,13 @@ app.post("/api/teacher/attendance",verifyToken, async (req, res) => {
 
     // ৪. Attendance Collection-এ Save বা Update করা
     const result = await attendanceCollection.updateOne(filter, updateDoc, { upsert: true });
+    await createNotification({
+    recipientRole: "admin",
+    title: "Student Attendance Submitted",
+    message: `Attendance for ${req.body.className} has been submitted by teacher ${req.body.teacherName}.`,
+    type: "attendance",
+    link: "/dashboard/admin/attendance"
+  });
 
     res.json({ 
       success: true, 
@@ -1156,8 +1222,8 @@ app.post('/api/teacher/marks',verifyToken, async (req, res) => {
             classId,
             examType,
             subjectName,
-            teacherEmail: teacher.email, // টিচারের ইমেইল স্ট্রিং
-            teacherName: teacher.name || "", // টিচারের নাম
+            teacherEmail: teacher.email, 
+            teacherName: teacher.name || "", 
             obtainedMarks: Number(item.obtainedMarks) || 0,
             updatedAt: new Date()
           }
@@ -1167,6 +1233,34 @@ app.post('/api/teacher/marks',verifyToken, async (req, res) => {
     }));
 
     await marksCollection.bulkWrite(operations);
+   // ২. Notifications Loop (Fixed Lookup Query)
+    for (const item of marks) {
+      let student = null;
+
+      if (ObjectId.isValid(item.studentId)) {
+        student = await usersCollection.findOne({
+          $or: [
+            { _id: new ObjectId(item.studentId) },
+            { studentId: item.studentId }
+          ]
+        });
+      } else {
+        student = await usersCollection.findOne({ studentId: item.studentId });
+      }
+      if (student?.email) {
+        await createNotification({
+          recipientRole: "student",
+          recipientEmail: student.email,
+          targetClass: classId,
+          title: "Marks Published",
+          message: `Your ${subjectName} marks for ${examType} have been published. Obtained: ${item.obtainedMarks}`,
+          type: "mark",
+          link: "/dashboard/student/results" 
+        });
+      } else {
+        console.log(`Student not found for ID: ${item.studentId}`);
+      }
+    }
     res.status(200).json({ success: true, message: "Marks saved/updated successfully!" });
   } catch (error) {
     console.error("Error saving marks:", error);
@@ -1217,6 +1311,7 @@ app.delete('/api/teacher/marks',verifyToken, async (req, res) => {
 
 // TEACHER ASSIGNMENT MANAGEMENT APIs
 // ১. POST: Teacher Assignment Publish API
+
 app.post("/api/teacher/assignments",verifyToken, async (req, res) => {
   try {
     const { 
@@ -1250,7 +1345,17 @@ app.post("/api/teacher/assignments",verifyToken, async (req, res) => {
     };
 
     const result = await assignmentsCollection.insertOne(newAssignment);
+    const formattedDeadline = new Date(deadline).toLocaleDateString();
 
+    await createNotification({
+      recipientRole: "student",
+      targetClass: classId,                   
+      targetGroup: group || "General",        
+      title: "New Assignment",
+      message: `${subject}: ${title}. Submission deadline: ${formattedDeadline}`,
+      type: "assignment",
+      link: "/dashboard/student/assignments"
+    });
     return res.status(201).json({
       success: true,
       message: "Assignment published successfully!",
@@ -1551,7 +1656,7 @@ app.get('/api/teacher/dashboard-stats', async (req, res) => {
 
 //  my students list for teacher
  
-app.get('/api/teacher/my-students', async (req, res) => {
+app.get('/api/teacher/my-students',verifyToken, async (req, res) => {
   try {
     const { teacherEmail } = req.query;
 
@@ -1609,7 +1714,7 @@ app.get('/api/teacher/my-students', async (req, res) => {
 });
 
 // GET: Teacher Fetch Submissions for a Specific Assignment
-app.get("/api/teacher/assignments/:id/submissions", async (req, res) => {
+app.get("/api/teacher/assignments/:id/submissions",verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1633,7 +1738,7 @@ app.get("/api/teacher/assignments/:id/submissions", async (req, res) => {
 
 
 
-app.get('/api/teacher/attendance-status', async (req, res) => {
+app.get('/api/teacher/attendance-status',verifyToken, async (req, res) => {
   try {
     const { teacherEmail } = req.query;
     if (!teacherEmail) {
@@ -1713,7 +1818,13 @@ app.post('/api/teacher/check-in',verifyToken, async (req, res) => {
     };
 
     const result = await teacherAttendanceCollection.insertOne(newAttendance);
-
+    await createNotification({
+    recipientRole: "admin",
+    title: "Teacher Self Attendance Logged",
+    message: `Teacher ${req.body.teacherName} recorded attendance for today.`,
+    type: "attendance",
+    link: "/dashboard/admin/attendance"
+  });
     res.status(201).json({
       success: true,
       message: `Checked in successfully as ${attendanceStatus}!`,
@@ -1727,7 +1838,7 @@ app.post('/api/teacher/check-in',verifyToken, async (req, res) => {
 });
 
 // GET: Student Dashboard Overview API
-app.get("/api/student/dashboard", async (req, res) => {
+app.get("/api/student/dashboard",verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
 
@@ -1842,7 +1953,7 @@ app.get("/api/student/dashboard", async (req, res) => {
   }
 });
 // GET: Student Full Routine API
-app.get("/api/student/routine", async (req, res) => {
+app.get("/api/student/routine",verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
 
@@ -1906,7 +2017,7 @@ app.get("/api/student/routine", async (req, res) => {
 
 // GET: Student Full Attendance API
 // GET: Student Attendance API
-app.get("/api/student/attendance", async (req, res) => {
+app.get("/api/student/attendance",verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
 
@@ -1995,7 +2106,7 @@ app.get("/api/student/attendance", async (req, res) => {
 });
 
 // GET: Student Exam Results API
-app.get("/api/student/results", async (req, res) => {
+app.get("/api/student/results",verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
 
@@ -2094,7 +2205,7 @@ app.get("/api/student/results", async (req, res) => {
 
 // STUDENT ASSIGNMENT APIs
 // ১. GET: Student Assignments List with Status
-app.get("/api/student/assignments", async (req, res) => {
+app.get("/api/student/assignments",verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
 
@@ -2217,6 +2328,16 @@ app.post("/api/student/assignments/submit",verifyToken, async (req, res) => {
       { $set: submissionData },
       { upsert: true }
     );
+    await createNotification({
+   recipientRole: "teacher",
+      recipientEmail: assignment.teacherEmail, 
+      targetClass: assignment.classId || null,
+      targetGroup: assignment.group || null,
+      title: "Assignment Submitted",
+      message: `Student ${student.name || "Student"} (ID: ${studentIdStr}) submitted assignment for ${assignment.subject || assignment.title}.`,
+      type: "submission",
+      link: "/dashboard/teacher/assignments"
+  });
 
     return res.status(200).json({
       success: true,
@@ -2279,6 +2400,7 @@ app.get("/api/student/fees", verifyToken, async (req, res) => {
 
 
 // ২. Secure Endpoint: POST /api/student/pay
+
 app.post("/api/student/pay", verifyToken, async (req, res) => {
   try {
     const userEmail = req.user?.email;
@@ -2343,7 +2465,13 @@ app.post("/api/student/pay", verifyToken, async (req, res) => {
     };
 
     const result = await paymentsCollection.insertOne(newPayment);
-
+     await createNotification({
+    recipientRole: "admin",
+    title: "New Payment Received",
+    message: `Payment of ৳${amount} received from ${student.name} (ID: ${student.studentId || "N/A"}).`,
+    type: "payment",
+    link: "/dashboard/admin/fees"
+  });
     return res.status(201).json({
       success: true,
       message: "Payment submitted successfully!",
@@ -2377,7 +2505,7 @@ app.get('/api/notice', async (req, res) => {
 
 
 // 🚀 1. FORGOT PASSWORD API
-app.post('/api/auth/forgot-password', async (req, res) => {
+app.post('/api/auth/forgot-password',verifyToken, async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -2423,7 +2551,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
 
 // 🚀 2. RESET PASSWORD API
-app.post('/api/auth/reset-password', async (req, res) => {
+app.post('/api/auth/reset-password',verifyToken, async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
 
@@ -2561,7 +2689,7 @@ app.put("/api/profile/update-student",verifyToken, async (req, res) => {
   }
 });
 
-// Express Backend: কারেন্ট ইউজারের আপডেটেড প্রোফাইল পাওয়ার জন্য
+
 app.get("/api/profile/me",verifyToken, async (req, res) => {
   try {
     const userEmail = req.user?.email; // Auth Middleware থেকে প্রাপ্ত ইমেইল
@@ -2580,7 +2708,7 @@ app.get("/api/profile/me",verifyToken, async (req, res) => {
 });
 
 // 1. Submit Application Route
-app.post('/api/admission/apply', async (req, res) => {
+app.post('/api/admission/apply',verifyToken, async (req, res) => {
   try {
     const {
       applicantName, dateOfBirth, gender, email, phone, profilePhoto,
@@ -2656,6 +2784,13 @@ app.post('/api/admission/apply', async (req, res) => {
     };
 
     const result = await admissionCollection.insertOne(newDoc);
+     await createNotification({
+    recipientRole: "admin",
+    title: "New Admission Application",
+    message: `New admission form submitted by ${req.body.name} for ${req.body.class}.`,
+    type: "admission",
+    link: "/dashboard/admin/admissions"
+  });
 
     res.status(201).json({
       success: true,
@@ -2677,7 +2812,7 @@ app.post('/api/admission/apply', async (req, res) => {
 });
 
 
-app.get('/api/admission/my-status', async (req, res) => {
+app.get('/api/admission/my-status', verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
 
@@ -2712,7 +2847,7 @@ app.get('/api/admission/my-status', async (req, res) => {
 //  * 2. Admin Route: Dynamic Stats
 //  * GET /api/admin/stats
  
-app.get('/api/admin/stats/count', async (req, res) => {
+app.get('/api/admin/stats/count', verifyToken, async (req, res) => {
   try {
     const total = await admissionCollection.countDocuments();
     const pending = await admissionCollection.countDocuments({ status: 'Pending' });
@@ -2732,7 +2867,7 @@ app.get('/api/admin/stats/count', async (req, res) => {
  * 3. Admin Route: Search, Filter & Pagination
  * GET /api/admin/applications
  */
-app.get('/api/admin/applications', async (req, res) => {
+app.get('/api/admin/applications',verifyToken, async (req, res) => {
   try {
     const { search, applyingClass, group, status, page = 1, limit = 10 } = req.query;
 
@@ -2781,7 +2916,7 @@ app.get('/api/admin/applications', async (req, res) => {
  * 4. Admin Route: Approve Application
  * PATCH /api/admin/approve/:id
  */
-app.patch('/api/admin/approve/:id', async (req, res) => {
+app.patch('/api/admin/approve/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const adminIdentifier = req.user?.email || 'Admin';
@@ -2818,7 +2953,7 @@ app.patch('/api/admin/approve/:id', async (req, res) => {
  * 5. Admin Route: Reject Application
  * PATCH /api/admin/reject/:id
  */
-app.patch('/api/admin/reject/:id', async (req, res) => {
+app.patch('/api/admin/reject/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { rejectionReason } = req.body;
@@ -2855,6 +2990,124 @@ app.patch('/api/admin/reject/:id', async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to reject application.' });
   }
 });
+
+app.get("/api/notifications", verifyToken, async (req, res) => {
+  try {
+    const { email, role, studentClass } = req.query;
+
+    if (!email || !role) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and role are required"
+      });
+    }
+
+    let query;
+
+    if (role === "admin") {
+      query = {
+        $or: [
+          { recipientRole: "admin", recipientEmail: email },
+          { recipientRole: "admin", recipientEmail: null },
+          { recipientRole: "all" }
+        ]
+      };
+    } else if (role === "teacher") {
+      query = {
+        $or: [
+          { recipientRole: "teacher", recipientEmail: email },
+          { recipientRole: "teacher", recipientEmail: null },
+          { recipientRole: "all" }
+        ]
+      };
+    } else if (role === "student") {
+      const studentConditions = [
+        { recipientRole: "student", recipientEmail: email },
+        { recipientRole: "all" }
+      ];
+
+      
+      if (studentClass && studentClass !== "undefined" && studentClass !== "null") {
+        studentConditions.push({
+          recipientRole: "student",
+          targetClass: { $regex: new RegExp(`^${studentClass.trim()}$`, "i") } 
+        });
+      }
+
+      query = { $or: studentConditions };
+    } else {
+      query = { recipientRole: role };
+    }
+
+    const notifications = await notificationsCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .toArray();
+
+    return res.json({
+      success: true,
+      notifications
+    });
+
+  } catch (error) {
+    console.error("Notification fetch error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+app.patch("/api/notifications/:id/read",verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Notification ID" });
+    }
+
+    const result = await db.collection("notifications").updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isRead: true } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "Notification not found" });
+    }
+
+    res.json({ success: true, message: "Notification marked as read" });
+  } catch (error) {
+    console.error("Error updating notification:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ২. নোটিফিকেশন ডিলিট করার API (DELETE)
+app.delete("/api/notifications/:id", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Notification ID" });
+    }
+
+    const result = await db.collection("notifications").deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "Notification not found" });
+    }
+
+    res.json({ success: true, message: "Notification deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting notification:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
 
 
     // Send a ping to confirm a successful connection
