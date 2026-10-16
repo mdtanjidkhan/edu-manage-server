@@ -86,7 +86,7 @@ async function generateApplicationId() {
   return `ADM-${currentYear}-${sequenceNumber}`;
 }
 
-// Helper Function: নোটিফিকেশন ক্রিয়েট করার জন্য
+// Helper Function: 
 async function createNotification({ recipientRole, recipientEmail, targetClass, targetGroup, title, message, type, link }) {
   try {
     await notificationsCollection.insertOne({
@@ -107,15 +107,26 @@ async function createNotification({ recipientRole, recipientEmail, targetClass, 
 }
 
 
-    // 🚀 TASK 1.1: ADMIN STATS API
-    app.get('/api/admin/stats', async (req, res) => {
+    //  TASK 1.1: ADMIN STATS API
+app.get('/api/admin/stats',verifyToken, async (req, res) => {
       try {
-       
         const totalStudents = await usersCollection.countDocuments({ role: "student" });
         const totalTeachers = await usersCollection.countDocuments({ role: "teacher" });
         
-        const totalFees = 45000; 
-        const attendancePercentage = "92%";
+        const totalFeesResult = await paymentsCollection.aggregate([
+          { $match: { status: "Paid" } },
+          { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]).toArray();
+        const totalFees = totalFeesResult.length > 0 ? totalFeesResult[0].total : 0;
+
+        const totalAttendanceRecords = await attendanceCollection.countDocuments({});
+        const presentRecords = await attendanceCollection.countDocuments({ 
+          status: { $regex: /^present$/i } 
+        });
+
+        const attendancePercentage = totalAttendanceRecords > 0 
+          ? `${Math.round((presentRecords / totalAttendanceRecords) * 100)}%` 
+          : "0%";
 
         res.status(200).json({
           success: true,
@@ -132,11 +143,10 @@ async function createNotification({ recipientRole, recipientEmail, targetClass, 
       }
     });
 
-
  // ==========================================
 // 🚀 TASK 1.2: GET ALL STUDENTS
 
-app.get('/api/admin/students', async (req, res) => {
+app.get('/api/admin/students',verifyToken, async (req, res) => {
   try {
     const { classId } = req.query; 
     const query = { role: "student" };
@@ -322,7 +332,7 @@ app.delete('/api/admin/students/:id',verifyToken, async (req, res) => {
 
 //  TASK 1.3: GET ALL TEACHERS
 
-app.get('/api/admin/teachers', async (req, res) => {
+app.get('/api/admin/teachers',verifyToken, async (req, res) => {
   try {
     const teachers = await usersCollection
       .find({ role: "teacher" })
@@ -469,7 +479,7 @@ app.delete('/api/admin/teachers/:id',verifyToken, async (req, res) => {
 // ==========================================
 // 🚀 TASK 1.4: GET ALL USERS FOR ROLE & STATUS MANAGEMENT
 // ==========================================
-app.get('/api/admin/users', async (req, res) => {
+app.get('/api/admin/users',verifyToken, async (req, res) => {
   try {
     const users = await usersCollection
       .find({})
@@ -520,7 +530,7 @@ app.patch('/api/admin/users/:id/access',verifyToken, async (req, res) => {
 
 
 // 1. STUDENT ATTENDANCE REPORT API (GET)
-app.get('/api/admin/attendance/students',  async (req, res) => {
+app.get('/api/admin/attendance/students',verifyToken,  async (req, res) => {
   try {
     const { date, subject } = req.query;
 
@@ -551,7 +561,7 @@ app.get('/api/admin/attendance/students',  async (req, res) => {
 // 2. TEACHER ATTENDANCE REPORT API (GET)
 // ==========================================
 
-app.get('/api/admin/attendance/teachers', async (req, res) => {
+app.get('/api/admin/attendance/teachers',verifyToken, async (req, res) => {
   try {
     const { date, subject } = req.query;
 
@@ -668,7 +678,7 @@ await createNotification({
 
 // 2. GET: Get All Routines (Admin View)
 
-app.get('/api/admin/routine', async (req, res) => {
+app.get('/api/admin/routine',verifyToken, async (req, res) => {
   try {
     const { classId, day } = req.query;
     let query = {};
@@ -965,7 +975,7 @@ app.put('/api/admin/settings',verifyToken, async (req, res) => {
 });
 
 // GET: notices (Student & Teacher Dashboard-
-app.get('/api/notices', async (req, res) => {
+app.get('/api/notices',verifyToken, async (req, res) => {
   try {
     const { target } = req.query; // e.g. /api/notices?target=Students
     let query = {};
@@ -984,7 +994,7 @@ app.get('/api/notices', async (req, res) => {
     res.status(500).json({ success: false, message: "Failed to fetch notices" });
   }
 });
-// POST: নতুন নোটিশ তৈরি করা (Admin Only)
+//  (Admin Only)
 app.post('/api/admin/notices',verifyToken, async (req, res) => {
   try {
     const { title, description, targetAudience, category } = req.body;
@@ -2505,7 +2515,7 @@ app.get('/api/notice', async (req, res) => {
 
 
 // 🚀 1. FORGOT PASSWORD API
-app.post('/api/auth/forgot-password',verifyToken, async (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -2551,7 +2561,7 @@ app.post('/api/auth/forgot-password',verifyToken, async (req, res) => {
 
 
 // 🚀 2. RESET PASSWORD API
-app.post('/api/auth/reset-password',verifyToken, async (req, res) => {
+app.post('/api/auth/reset-password', async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
 
@@ -2787,7 +2797,7 @@ app.post('/api/admission/apply',verifyToken, async (req, res) => {
      await createNotification({
     recipientRole: "admin",
     title: "New Admission Application",
-    message: `New admission form submitted by ${req.body.name} for ${req.body.class}.`,
+    message: `New admission form submitted by ${applicantName} for ${applyingClass}.`,
     type: "admission",
     link: "/dashboard/admin/admissions"
   });
