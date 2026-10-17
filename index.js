@@ -350,14 +350,16 @@ app.get('/api/admin/teachers',verifyToken, async (req, res) => {
 
 //  TASK 1.3: ADD NEW TEACHER (POST)
 // 1. POST: Create New Teacher
-app.post('/api/admin/teachers',verifyToken, async (req, res) => {
+app.post('/api/admin/teachers', verifyToken, async (req, res) => {
   try {
     const {
       name,
       email,
       password,
       designation,
-      subject
+      subject,
+      qualification, 
+      phone          
     } = req.body;
 
     if (!name || !email || !password) {
@@ -400,7 +402,9 @@ app.post('/api/admin/teachers',verifyToken, async (req, res) => {
         $set: {
           role: "teacher",
           designation: designation || "Assistant Teacher",
-          subject: subject || "Mathematics",
+          subject: subject || "General",
+          qualification: qualification || "B.Sc / M.Sc in Education", // <--- Save Qualification
+          phone: phone || "",                                         // <--- Save Phone
           emailVerified: false,
           updatedAt: new Date()
         }
@@ -424,10 +428,17 @@ app.post('/api/admin/teachers',verifyToken, async (req, res) => {
 });
 
 // 2. PUT: Update Teacher Details
-app.put('/api/admin/teachers/:id',verifyToken, async (req, res) => {
+app.put('/api/admin/teachers/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, designation, subject } = req.body;
+    const { 
+      name, 
+      email, 
+      designation, 
+      subject, 
+      qualification, // <--- New Field
+      phone          // <--- New Field
+    } = req.body;
 
     const filter = { _id: new ObjectId(id) };
     const updateDoc = {
@@ -436,6 +447,8 @@ app.put('/api/admin/teachers/:id',verifyToken, async (req, res) => {
         email,
         designation: designation || "Assistant Teacher",
         subject: subject || "Mathematics",
+        qualification: qualification || "", // <--- Update Qualification
+        phone: phone || "",                   // <--- Update Phone
         updatedAt: new Date()
       }
     };
@@ -1101,7 +1114,7 @@ app.post("/api/teacher/attendance",verifyToken, async (req, res) => {
     await createNotification({
     recipientRole: "admin",
     title: "Student Attendance Submitted",
-    message: `Attendance for ${req.body.className} has been submitted by teacher ${req.body.teacherName}.`,
+    message: `Attendance for ${classId} has been submitted by teacher ${teacher.name}.`,
     type: "attendance",
     link: "/dashboard/admin/attendance"
   });
