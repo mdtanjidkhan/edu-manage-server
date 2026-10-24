@@ -1070,6 +1070,109 @@ app.delete('/api/admin/notices/:id',verifyToken, async (req, res) => {
 });
 
 
+
+app.get('/api/admin/results', verifyToken, async (req, res) => {
+  try {
+    const { classId, examType, subjectName, group, search, status } = req.query;
+
+    let query = {};
+
+    if (classId) query.classId = classId.trim();
+    if (examType) query.examType = examType.trim();
+    if (subjectName) query.subjectName = subjectName.trim();
+    if (group && group !== "All") query.group = group.trim();
+    if (status && status !== "All") query.status = status.trim();
+
+    if (search) {
+      query.$or = [
+        { studentName: { $regex: search, $options: "i" } },
+        { roll: { $regex: search, $options: "i" } }
+      ];
+    }
+
+    const results = await marksCollection.find(query).sort({ roll: 1 }).toArray();
+
+    res.status(200).json({
+      success: true,
+      count: results.length,
+      results: results || []
+    });
+
+  } catch (error) {
+    console.error("Error fetching admin results:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch results for admin" });
+  }
+});
+
+app.patch('/api/admin/results/status', verifyToken, async (req, res) => {
+  try {
+    const { classId, examType, subjectName, status, editPermitted } = req.body;
+
+    if (!classId || !examType || !subjectName) {
+      return res.status(400).json({ success: false, message: "Required filter fields missing" });
+    }
+
+    let updateFields = {};
+    if (status) updateFields.status = status;
+    if (typeof editPermitted === "boolean") updateFields.editPermitted = editPermitted;
+    updateFields.updatedAt = new Date();
+
+    const result = await marksCollection.updateMany(
+      {
+        classId: classId.trim(),
+        examType: examType.trim(),
+        subjectName: subjectName.trim()
+      },
+      {
+        $set: updateFields
+      }
+    );
+
+    if (status === "Published") {
+      const publishedMarks = await marksCollection.find({
+        classId: classId.trim(),
+        examType: examType.trim(),
+        subjectName: subjectName.trim()
+      }).toArray();
+
+      for (const item of publishedMarks) {
+        let student = null;
+        if (ObjectId.isValid(item.studentId)) {
+          student = await usersCollection.findOne({
+            $or: [
+              { _id: new ObjectId(item.studentId) },
+              { studentId: item.studentId }
+            ]
+          });
+        } else {
+          student = await usersCollection.findOne({ studentId: item.studentId });
+        }
+
+        if (student?.email) {
+          await createNotification({
+            recipientRole: "student",
+            recipientEmail: student.email,
+            targetClass: classId,
+            title: "Result Published! Check Your Marks",
+            message: `Your ${subjectName} marks for ${examType} have been published.`,
+            type: "mark",
+            link: "/dashboard/student/results" 
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Status updated successfully! Modified count: ${result.modifiedCount}`
+    });
+
+  } catch (error) {
+    console.error("Error updating mark status:", error);
+    res.status(500).json({ success: false, message: "Failed to update status" });
+  }
+});
+
 // task 2.1 teacher panel
 
 
@@ -1213,7 +1316,8 @@ app.get("/api/teacher/routine/:teacherEmail", async (req, res) => {
 
 // 1. POST: Create or Update (Upsert) Marks
 
-app.post('/api/teacher/marks',verifyToken, async (req, res) => {
+
+app.post('/api/teacher/marks', verifyToken, async (req, res) => {
   try {
     const { classId, examType, subjectName, marks, teacherEmail } = req.body;
     if (!classId || !examType || !subjectName || !marks || !Array.isArray(marks) || marks.length === 0) {
@@ -1228,7 +1332,22 @@ app.post('/api/teacher/marks',verifyToken, async (req, res) => {
       return res.status(404).json({ success: false, message: "Teacher account not found in database" });
     }
 
-    // ৩. MongoDB Bulk Write Operation
+    const existingMark = await marksCollection.findOne({
+      classId,
+      examType,
+      subjectName,
+      status: "Published",
+      editPermitted: { $ne: true }
+    });
+
+    if (existingMark) {
+      return res.status(403).json({
+        success: false,
+        message: "Marks are already published by admin. Request admin permission to edit."
+      });
+    }
+
+    // ২. MongoDB Bulk Write Operation
     const operations = marks.map((item) => ({
       updateOne: {
         filter: {
@@ -1242,12 +1361,15 @@ app.post('/api/teacher/marks',verifyToken, async (req, res) => {
             studentId: item.studentId,
             studentName: item.studentName || "N/A",
             roll: item.roll || "N/A",
+            group: item.group || "General",
             classId,
             examType,
             subjectName,
             teacherEmail: teacher.email, 
             teacherName: teacher.name || "", 
             obtainedMarks: Number(item.obtainedMarks) || 0,
+            status: "Unpublished",
+            editPermitted: false,
             updatedAt: new Date()
           }
         },
@@ -1256,40 +1378,31 @@ app.post('/api/teacher/marks',verifyToken, async (req, res) => {
     }));
 
     await marksCollection.bulkWrite(operations);
-   // ২. Notifications Loop (Fixed Lookup Query)
-    for (const item of marks) {
-      let student = null;
 
-      if (ObjectId.isValid(item.studentId)) {
-        student = await usersCollection.findOne({
-          $or: [
-            { _id: new ObjectId(item.studentId) },
-            { studentId: item.studentId }
-          ]
-        });
-      } else {
-        student = await usersCollection.findOne({ studentId: item.studentId });
-      }
-      if (student?.email) {
+
+    const admins = await usersCollection.find({ role: "admin" }).toArray();
+    for (const admin of admins) {
+      if (admin?.email) {
         await createNotification({
-          recipientRole: "student",
-          recipientEmail: student.email,
+          recipientRole: "admin",
+          recipientEmail: admin.email,
           targetClass: classId,
-          title: "Marks Published",
-          message: `Your ${subjectName} marks for ${examType} have been published. Obtained: ${item.obtainedMarks}`,
-          type: "mark",
-          link: "/dashboard/student/results" 
+          title: "New Marks Submitted ",
+          message: `${teacher.name || "A teacher"} submitted ${subjectName} marks for ${classId} (${examType}) for review.`,
+          type: "mark_submission",
+          link: "/dashboard/admin/results" 
         });
-      } else {
-        console.log(`Student not found for ID: ${item.studentId}`);
       }
     }
+
     res.status(200).json({ success: true, message: "Marks saved/updated successfully!" });
   } catch (error) {
     console.error("Error saving marks:", error);
     res.status(500).json({ success: false, message: "Failed to save marks" });
   }
 });
+
+
 
 
 // 2. GET: Read Marks (Filters: Class, Exam, Subject)
@@ -2129,7 +2242,10 @@ app.get("/api/student/attendance",verifyToken, async (req, res) => {
 });
 
 // GET: Student Exam Results API
-app.get("/api/student/results",verifyToken, async (req, res) => {
+
+
+// GET: Student Exam Results API
+app.get("/api/student/results", verifyToken, async (req, res) => {
   try {
     const { email } = req.query;
 
@@ -2146,9 +2262,9 @@ app.get("/api/student/results",verifyToken, async (req, res) => {
     const { _id, studentId, class: userClass, classId } = student;
     const currentClass = classId || userClass;
 
-    // ২. marks collection 
     const markRecords = await marksCollection
       .find({
+        status: "Published", 
         $or: [
           { studentId: studentId?.toString() },
           { studentId: _id?.toString() }
@@ -2156,7 +2272,7 @@ app.get("/api/student/results",verifyToken, async (req, res) => {
       })
       .toArray();
 
-    // ৩. examType 
+    // ৩. examType অনুযায়ী গ্রুপ করা
     const examMap = {};
 
     markRecords.forEach((record) => {
@@ -2165,7 +2281,7 @@ app.get("/api/student/results",verifyToken, async (req, res) => {
       const obtainedMarks = Number(record.obtainedMarks || record.marks || 0);
       const totalMarks = Number(record.totalMarks || 100);
 
-      // 
+      // Grade & Point calculate logic
       const calculateGrade = (score, max) => {
         const percentage = (score / max) * 100;
         if (percentage >= 80) return { grade: "A+", point: 5.0 };
@@ -2196,7 +2312,7 @@ app.get("/api/student/results",verifyToken, async (req, res) => {
       });
     });
 
-    // ৪.
+
     const examResults = Object.values(examMap).map((exam) => {
       const totalPoints = exam.subjects.reduce((sum, s) => sum + s.point, 0);
       const hasFailed = exam.subjects.some((s) => s.grade === "F");
@@ -3127,6 +3243,69 @@ app.delete("/api/notifications/:id", verifyToken, async (req, res) => {
   } catch (error) {
     console.error("Error deleting notification:", error);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// accadimic result public page e 
+app.get('/api/results', async (req, res) => {
+  try {
+    const { classId, examType, roll } = req.query;
+
+    if (!classId || !examType || !roll) {
+      return res.status(400).json({
+        success: false,
+        message: "Class, Exam Type and Roll/Student ID are required"
+      });
+    }
+
+    // Roll/Student ID and Exam Type Search Case-Insensitive Regex Match
+    const rollRegex = new RegExp(`^${roll.trim()}$`, "i");
+    const examRegex = new RegExp(`^${examType.trim()}$`, "i");
+
+    const result = await marksCollection.aggregate([
+      {
+        $match: {
+          classId: classId.trim(),
+          examType: { $regex: examRegex },$or: [
+            { roll: { $regex: rollRegex } },
+            { studentId: { $regex: rollRegex } }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: "$studentId",
+          studentName: { $first: "$studentName" },
+          roll: { $first: "$roll" },
+          classId: { $first: "$classId" },
+          examType: { $first: "$examType" },
+          totalMarks: { $sum: "$obtainedMarks" },
+          subjects: {
+            $push: {
+              subjectName: "$subjectName",
+              obtainedMarks: "$obtainedMarks",
+              teacherName: "$teacherName"
+            }
+          }
+        }
+      }
+    ]).toArray();
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No result found for the provided information."
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: result[0]
+    });
+
+  } catch (error) {
+    console.error("Result fetch error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch result" });
   }
 });
 
